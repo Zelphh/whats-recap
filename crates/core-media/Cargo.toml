@@ -1,0 +1,17 @@
+[package]
+name = "core-media"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+core-parser = { version = "0.1.0", path = "../core-parser" }
+core-storage = { version = "0.1.0", path = "../core-storage" }
+image = { version = "0.25.10", default-features = false, features = ["webp", "png"] }
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.0"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+zip = "8.6.0"

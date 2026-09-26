@@ -1,0 +1,12 @@
+[package]
+name = "synth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive"] }
+core-media = { version = "0.1.0", path = "../core-media" }
+rand = "0.10.3"
+zip = "8.6.0"

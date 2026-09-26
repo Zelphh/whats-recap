@@ -1,0 +1,12 @@
+/target
+/node_modules
+/dist
+*.tsbuildinfo
+/src-tauri/gen
+*.db
+*.db-wal
+*.db-shm
+*.db.partial
+# Exports reais nunca entram no repositório (use o gerador sintético).
+*.zip
+/conversas
