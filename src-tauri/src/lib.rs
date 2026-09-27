@@ -266,6 +266,18 @@ async fn locate_date(app: AppHandle, id: String, date: String) -> CmdResult<Opti
     open(&app, &id)?.first_id_at_or_after(ts).map_err(err)
 }
 
+/// Pergunta ao chat (tipo 1: contagens). A resposta traz o texto, a ferramenta usada e as citações.
+#[tauri::command]
+async fn chat_ask(app: AppHandle, id: String, question: String) -> CmdResult<core_chat::ChatAnswer> {
+    blocking(move || core_chat::ask(&open(&app, &id)?, &question).map_err(err)).await
+}
+
+/// Perguntas de exemplo com os nomes da conversa.
+#[tauri::command]
+async fn chat_examples(app: AppHandle, id: String) -> CmdResult<Vec<String>> {
+    Ok(core_chat::examples(&open(&app, &id)?.summary().map_err(err)?.authors))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -276,6 +288,8 @@ pub fn run() {
             import_conversation,
             cancel_import,
             get_sticker_thumb,
+            chat_ask,
+            chat_examples,
             delete_conversation,
             get_stats,
             get_settings,

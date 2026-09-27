@@ -523,6 +523,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-chat"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "core-parser",
+ "core-stats",
+ "core-storage",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -583,6 +598,7 @@ dependencies = [
  "chrono",
  "regex",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "zip",
 ]
@@ -3581,7 +3597,9 @@ dependencies = [
  "chrono",
  "clap",
  "core-media",
+ "core-parser",
  "rand",
+ "regex",
  "zip",
 ]
 
@@ -4629,6 +4647,7 @@ name = "whats-recap"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "core-chat",
  "core-media",
  "core-parser",
  "core-stats",

@@ -5,8 +5,9 @@ import { Home } from "./views/Home";
 import { Dashboard } from "./views/Dashboard";
 import { Viewer } from "./views/Viewer";
 import { Settings } from "./views/Settings";
+import { Chat, type ChatTurn } from "./views/Chat";
 
-type View = "home" | "dashboard" | "viewer" | "settings";
+type View = "home" | "dashboard" | "viewer" | "settings" | "chat";
 
 export function App() {
   const [conversations, setConversations] = useState<ConversationInfo[]>([]);
@@ -15,6 +16,8 @@ export function App() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [jumpTo, setJumpTo] = useState<number | null>(null);
+  // Histórico do chat por conversa, mantido enquanto o app está aberto.
+  const [chats, setChats] = useState<Record<string, ChatTurn[]>>({});
 
   const refresh = useCallback(() => {
     api.listConversations().then(setConversations).catch(console.error);
@@ -65,13 +68,11 @@ export function App() {
             <button className="nav-item" disabled>
               Análises LLM <span className="nav-soon">em breve</span>
             </button>
-            <button className="nav-item" disabled>
-              Chat <span className="nav-soon">em breve</span>
-            </button>
+            {nav("chat", "Chat")}
           </>
         )}
       </aside>
-      <main className={view === "viewer" ? "" : "main"}>
+      <main className={view === "viewer" || view === "chat" ? "" : "main"}>
         {view === "home" && <Home conversations={conversations} onOpen={openConversation} onChanged={refresh} />}
         {view !== "home" && info && statsError && (
           <div className="page"><div className="error">{statsError}</div></div>
@@ -80,6 +81,15 @@ export function App() {
           (stats ? <Dashboard id={info.id} stats={stats} summary={info.summary} onOpenMessage={openMessage} /> : <div className="empty">Carregando…</div>)}
         {view === "viewer" && info && (
           <Viewer id={info.id} summary={info.summary} jumpTo={jumpTo} onJumpHandled={() => setJumpTo(null)} />
+        )}
+        {view === "chat" && info && (
+          <Chat
+            id={info.id}
+            summary={info.summary}
+            turns={chats[info.id] ?? []}
+            setTurns={(update) => setChats((c) => ({ ...c, [info.id]: update(c[info.id] ?? []) }))}
+            onOpenMessage={openMessage}
+          />
         )}
         {view === "settings" && info && <Settings id={info.id} hasMedia={info.summary.hasMedia} onStats={setStats} />}
       </main>

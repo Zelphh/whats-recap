@@ -54,6 +54,9 @@ fn import_and_query() {
     // Prefixo e acentos.
     assert_eq!(db.search("passag", 10).unwrap().len(), 1);
     assert!(db.search("\"", 10).is_ok());
+    let any = db.search_any(&["viajar".into(), "passagens".into()], 10).unwrap();
+    assert_eq!(any.iter().map(|m| m.id).collect::<Vec<_>>().len(), 2);
+    assert!(db.search_any(&[], 10).unwrap().is_empty());
 
     let ts = chrono::NaiveDate::from_ymd_opt(2023, 1, 13)
         .unwrap()

@@ -153,3 +153,28 @@ export interface ImportProgressEvent {
   fraction: number;
   messages: number;
 }
+
+// Chat (tipo 1: perguntas quantitativas).
+
+export type ChatRoute = "quantitative" | "retrieval" | "global" | "undecided";
+
+export interface ToolCall {
+  tool: "count_word" | "messages_by_hour" | "messages_by_period" | "first_occurrence" | "response_time";
+  args: {
+    word?: string;
+    author?: string;
+    from?: string;
+    to?: string;
+    granularity?: "day" | "week" | "month" | "year" | "weekday";
+  };
+}
+
+export interface ChatAnswer {
+  route: ChatRoute;
+  text: string;
+  tool: ToolCall | null;
+  /** Resultado bruto da ferramenta (JSON); a interface só mostra o texto e as citações. */
+  result: unknown;
+  interpretedBy: "heuristic" | null;
+  citations: MessageRow[];
+}

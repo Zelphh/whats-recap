@@ -11,7 +11,7 @@ mod source;
 
 pub use classify::classify_body;
 pub use classify::kind_from_file;
-pub use format::{ChatFormat, DateOrder, FormatError, Platform, detect_format};
+pub use format::{ChatFormat, DateOrder, FormatError, LineParts, Platform, detect_format};
 pub use source::{CountingReader, Source, SourceError};
 
 use chrono::NaiveDateTime;

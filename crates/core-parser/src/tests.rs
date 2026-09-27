@@ -175,3 +175,24 @@ fn zip_source() {
     assert_eq!(src.media_files().unwrap(), vec!["STK-20230113-WA0001.webp"]);
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[test]
+fn split_line_keeps_raw_pieces() {
+    let (fmt, _) = parse(IOS);
+    let line = "\u{200E}[12/01/2023, 14:31:02] Bruno: \u{200E}<anexado: x.webp>";
+    let p = fmt.split_line(line).unwrap();
+    assert_eq!(p.prefix, "\u{200E}[12/01/2023, 14:31:02] ");
+    assert_eq!(p.author, Some("Bruno"));
+    assert_eq!(p.body, "\u{200E}<anexado: x.webp>");
+    assert_eq!(format!("{}{}: {}", p.prefix, p.author.unwrap(), p.body), line);
+    assert_eq!(fmt.split_line("continuação"), None);
+
+    let (fmt, _) = parse(ANDROID);
+    let p = fmt
+        .split_line("12/01/2023 14:30 - As mensagens são protegidas")
+        .unwrap();
+    assert_eq!(
+        (p.prefix, p.author, p.body),
+        ("12/01/2023 14:30 - ", None, "As mensagens são protegidas")
+    );
+}

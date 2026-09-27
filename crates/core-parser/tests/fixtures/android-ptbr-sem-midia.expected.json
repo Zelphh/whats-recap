@@ -1,0 +1,98 @@
+{
+  "authors": [
+    "Pessoa A",
+    "Pessoa B"
+  ],
+  "dateOrder": "dmy",
+  "first": "2023-01-12 14:30:00",
+  "invalidDates": 0,
+  "kinds": {
+    "deleted": 2,
+    "media_hidden": 1,
+    "system": 2,
+    "text": 6
+  },
+  "last": "2023-12-25 23:59:00",
+  "messages": 11,
+  "orphanLines": 0,
+  "platform": "android",
+  "sample": [
+    {
+      "author": null,
+      "kind": "system",
+      "mediaFile": null,
+      "text": "As mensagens e as ligações são protegidas com a criptografia de ponta a ponta e ficam somente entre você e os participantes desta conversa. Nem mesmo o WhatsApp pode ler ou ouvi-las. Toque para saber mais.",
+      "ts": "2023-01-12 14:30:00"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "text",
+      "mediaFile": null,
+      "text": "bom dia! dormiu bem?",
+      "ts": "2023-01-12 14:30:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "text",
+      "mediaFile": null,
+      "text": "bom diaaa 😍\ndormi sim\ne você?",
+      "ts": "2023-01-12 14:31:00"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "media_hidden",
+      "mediaFile": null,
+      "text": null,
+      "ts": "2023-01-12 14:32:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "deleted",
+      "mediaFile": null,
+      "text": null,
+      "ts": "2023-01-12 14:33:00"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "deleted",
+      "mediaFile": null,
+      "text": null,
+      "ts": "2023-01-12 14:34:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "text",
+      "mediaFile": null,
+      "text": "combinado então",
+      "ts": "2023-01-12 14:35:00"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "text",
+      "mediaFile": null,
+      "text": "horário: 10h, pode ser?",
+      "ts": "2023-01-12 14:36:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "text",
+      "mediaFile": null,
+      "text": "https://exemplo.com/link",
+      "ts": "2023-01-13 09:00:00"
+    },
+    {
+      "author": null,
+      "kind": "system",
+      "mediaFile": null,
+      "text": "Pessoa A mudou para um novo número. Toque para enviar uma mensagem ou adicionar o novo número.",
+      "ts": "2023-01-13 09:01:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "text",
+      "mediaFile": null,
+      "text": "feliz natal!! 🎄🎅🏽",
+      "ts": "2023-12-25 23:59:00"
+    }
+  ]
+}

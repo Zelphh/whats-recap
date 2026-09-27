@@ -1,0 +1,16 @@
+[12/01/2023, 14:30:15] Pessoa A: ‎As mensagens e as ligações são protegidas com a criptografia de ponta a ponta e ficam somente entre você e os participantes desta conversa. Nem mesmo o WhatsApp pode ler ou ouvi-las.
+[12/01/2023, 14:30:20] Pessoa A: oi, tudo bem?
+[12/01/2023, 14:30:41] Pessoa B: tudo e vc?
+‎[12/01/2023, 14:31:02] Pessoa B: ‎figurinha omitida
+‎[12/01/2023, 14:32:00] Pessoa A: ‎imagem ocultada
+‎[12/01/2023, 14:32:10] Pessoa B: ‎áudio ocultado
+‎[12/01/2023, 14:32:30] Pessoa A: ‎vídeo omitido
+‎[12/01/2023, 14:33:00] Pessoa B: ‎DOC-0001.pdf • 2 páginas ‎documento omitido
+[12/01/2023, 14:34:00] Pessoa A: ‎Esta mensagem foi apagada.
+[12/01/2023, 14:35:00] Pessoa B: ‎Chamada de voz perdida
+[12/01/2023, 14:36:00] Pessoa A: tá bom ‎<Esta mensagem foi editada>
+[12/01/2023, 14:37:00] Pessoa B: linha 1
+linha 2
+[13/01/2023, 08:00:00] Pessoa A: ‎<anexado: 00000014-STICKER-2023-01-13-08-00-00.webp>
+[13/01/2023, 08:00:05] Pessoa B: ‎<anexado: 00000015-AUDIO-2023-01-13-08-00-05.opus>
+[13/01/2023, 08:00:09] Pessoa A: ‎<anexado: 00000016-PHOTO-2023-01-13-08-00-09.jpg>

@@ -105,6 +105,18 @@ impl RawStamp {
     }
 }
 
+/// Uma linha de cabeçalho quebrada em pedaços crus (sem limpeza), para ferramentas que
+/// precisam reescrever o export preservando o formato (ex.: o anonimizador).
+#[derive(Debug, PartialEq, Eq)]
+pub struct LineParts<'a> {
+    /// Data, hora e separador, exatamente como no arquivo (inclui `[`, `]`, ` - ` e invisíveis).
+    pub prefix: &'a str,
+    /// Nome do autor como aparece no arquivo; `None` em mensagens de sistema do Android.
+    pub author: Option<&'a str>,
+    /// Corpo da mensagem após `Autor: ` (ou o resto da linha, se não houver autor).
+    pub body: &'a str,
+}
+
 pub(crate) struct Header {
     pub ts: NaiveDateTime,
     pub author: Option<String>,
@@ -118,6 +130,29 @@ impl ChatFormat {
         match self.platform {
             Platform::Android => &ANDROID_RE,
             Platform::Ios => &IOS_RE,
+        }
+    }
+
+    /// Quebra um cabeçalho em prefixo, autor e corpo crus. `None` se a linha não for um cabeçalho.
+    pub fn split_line<'a>(&self, line: &'a str) -> Option<LineParts<'a>> {
+        let caps = self.regex().captures(line)?;
+        let rest = caps.get(8)?;
+        let prefix = &line[..rest.start()];
+        let rest = rest.as_str();
+        match split_author(rest) {
+            (Some(_), body) => {
+                let author_end = rest.len() - body.len() - 2;
+                Some(LineParts {
+                    prefix,
+                    author: Some(&rest[..author_end]),
+                    body,
+                })
+            }
+            (None, body) => Some(LineParts {
+                prefix,
+                author: None,
+                body,
+            }),
         }
     }
 

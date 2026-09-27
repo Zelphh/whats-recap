@@ -14,6 +14,7 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 chrono = "0.4.45"
+core-chat = { version = "0.1.0", path = "../crates/core-chat" }
 core-media = { version = "0.1.0", path = "../crates/core-media" }
 core-parser = { version = "0.1.0", path = "../crates/core-parser" }
 core-stats = { version = "0.1.0", path = "../crates/core-stats" }

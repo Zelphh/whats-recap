@@ -35,7 +35,7 @@ pub enum StorageError {
 
 pub type Result<T> = std::result::Result<T, StorageError>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageRow {
     pub id: i64,
@@ -232,6 +232,31 @@ impl Db {
              ORDER BY id LIMIT ?2"
         ))?;
         let rows = st.query_map(params![fts, limit], MessageRow::from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Busca por qualquer um dos termos (FTS5 com `OR`), das mensagens mais relevantes (bm25)
+    /// para as menos. Usada para sugerir trechos quando a pergunta é sobre o conteúdo.
+    pub fn search_any(&self, terms: &[String], limit: i64) -> Result<Vec<MessageRow>> {
+        let terms: Vec<String> = terms
+            .iter()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+            .collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let cols = MESSAGE_COLS
+            .split(", ")
+            .map(|c| format!("m.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut st = self.conn.prepare_cached(&format!(
+            "SELECT {cols} FROM messages_fts f JOIN messages m ON m.id = f.rowid
+             WHERE messages_fts MATCH ?1 AND m.author IS NOT NULL
+             ORDER BY bm25(messages_fts) LIMIT ?2"
+        ))?;
+        let rows = st.query_map(params![terms.join(" OR "), limit], MessageRow::from_row)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 

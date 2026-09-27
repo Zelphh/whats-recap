@@ -1,0 +1,71 @@
+{
+  "authors": [
+    "Pessoa A",
+    "Pessoa B"
+  ],
+  "dateOrder": "dmy",
+  "first": "2023-01-12 14:30:00",
+  "invalidDates": 0,
+  "kinds": {
+    "audio": 2,
+    "doc": 1,
+    "image": 2,
+    "sticker": 1,
+    "video": 1
+  },
+  "last": "2023-01-12 14:36:00",
+  "messages": 7,
+  "orphanLines": 0,
+  "platform": "android",
+  "sample": [
+    {
+      "author": "Pessoa A",
+      "kind": "sticker",
+      "mediaFile": "STK-20230112-WA0001.webp",
+      "text": null,
+      "ts": "2023-01-12 14:30:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "audio",
+      "mediaFile": "PTT-20230112-WA0002.opus",
+      "text": null,
+      "ts": "2023-01-12 14:31:00"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "image",
+      "mediaFile": "IMG-20230112-WA0003.jpg",
+      "text": "olha que lindo",
+      "ts": "2023-01-12 14:32:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "video",
+      "mediaFile": "VID-20230112-WA0004.mp4",
+      "text": null,
+      "ts": "2023-01-12 14:33:00"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "doc",
+      "mediaFile": "DOC-20230112-WA0005.pdf",
+      "text": null,
+      "ts": "2023-01-12 14:34:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "audio",
+      "mediaFile": "AUD-20230112-WA0006.mp3",
+      "text": null,
+      "ts": "2023-01-12 14:35:00"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "image",
+      "mediaFile": "IMG-20230112-WA0007.jpg",
+      "text": null,
+      "ts": "2023-01-12 14:36:00"
+    }
+  ]
+}

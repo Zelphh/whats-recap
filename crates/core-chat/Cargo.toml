@@ -1,0 +1,16 @@
+[package]
+name = "core-chat"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+core-parser = { version = "0.1.0", path = "../core-parser" }
+core-stats = { version = "0.1.0", path = "../core-stats" }
+core-storage = { version = "0.1.0", path = "../core-storage" }
+regex = "1.13.1"
+rusqlite = "0.40"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.21"

@@ -7,6 +7,14 @@
 *.db-wal
 *.db-shm
 *.db.partial
-# Exports reais nunca entram no repositório (use o gerador sintético).
+# Exports reais nunca entram no repositório: use o gerador sintético (`synth`) ou
+# anonimize com `synth --bin anonymize` antes de criar uma fixture.
 *.zip
 /conversas
+/exports
+Conversa do WhatsApp com *.txt
+Conversa do WhatsApp - *.txt
+WhatsApp Chat with *.txt
+WhatsApp Chat - *.txt
+Chat de WhatsApp con *.txt
+_chat.txt

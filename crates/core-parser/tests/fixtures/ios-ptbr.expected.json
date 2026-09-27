@@ -1,0 +1,130 @@
+{
+  "authors": [
+    "Pessoa A",
+    "Pessoa B"
+  ],
+  "dateOrder": "dmy",
+  "first": "2023-01-12 14:30:15",
+  "invalidDates": 0,
+  "kinds": {
+    "audio": 2,
+    "deleted": 1,
+    "doc": 1,
+    "image": 2,
+    "sticker": 2,
+    "system": 2,
+    "text": 4,
+    "video": 1
+  },
+  "last": "2023-01-13 08:00:09",
+  "messages": 15,
+  "orphanLines": 0,
+  "platform": "ios",
+  "sample": [
+    {
+      "author": null,
+      "kind": "system",
+      "mediaFile": null,
+      "text": "As mensagens e as ligações são protegidas com a criptografia de ponta a ponta e ficam somente entre você e os participantes desta conversa. Nem mesmo o WhatsApp pode ler ou ouvi-las.",
+      "ts": "2023-01-12 14:30:15"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "text",
+      "mediaFile": null,
+      "text": "oi, tudo bem?",
+      "ts": "2023-01-12 14:30:20"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "text",
+      "mediaFile": null,
+      "text": "tudo e vc?",
+      "ts": "2023-01-12 14:30:41"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "sticker",
+      "mediaFile": null,
+      "text": null,
+      "ts": "2023-01-12 14:31:02"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "image",
+      "mediaFile": null,
+      "text": null,
+      "ts": "2023-01-12 14:32:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "audio",
+      "mediaFile": null,
+      "text": null,
+      "ts": "2023-01-12 14:32:10"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "video",
+      "mediaFile": null,
+      "text": null,
+      "ts": "2023-01-12 14:32:30"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "doc",
+      "mediaFile": null,
+      "text": null,
+      "ts": "2023-01-12 14:33:00"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "deleted",
+      "mediaFile": null,
+      "text": null,
+      "ts": "2023-01-12 14:34:00"
+    },
+    {
+      "author": null,
+      "kind": "system",
+      "mediaFile": null,
+      "text": "Chamada de voz perdida",
+      "ts": "2023-01-12 14:35:00"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "text",
+      "mediaFile": null,
+      "text": "tá bom",
+      "ts": "2023-01-12 14:36:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "text",
+      "mediaFile": null,
+      "text": "linha 1\nlinha 2",
+      "ts": "2023-01-12 14:37:00"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "sticker",
+      "mediaFile": "00000014-STICKER-2023-01-13-08-00-00.webp",
+      "text": null,
+      "ts": "2023-01-13 08:00:00"
+    },
+    {
+      "author": "Pessoa B",
+      "kind": "audio",
+      "mediaFile": "00000015-AUDIO-2023-01-13-08-00-05.opus",
+      "text": null,
+      "ts": "2023-01-13 08:00:05"
+    },
+    {
+      "author": "Pessoa A",
+      "kind": "image",
+      "mediaFile": "00000016-PHOTO-2023-01-13-08-00-09.jpg",
+      "text": null,
+      "ts": "2023-01-13 08:00:09"
+    }
+  ]
+}

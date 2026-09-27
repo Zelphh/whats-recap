@@ -4,7 +4,7 @@ mod emoji;
 mod emoji_table;
 mod exclusive;
 pub mod media;
-mod response;
+pub mod response;
 pub mod text;
 
 pub use exclusive::{ExclusiveWord, ExclusiveWords};

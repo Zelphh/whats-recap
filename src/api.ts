@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ConversationInfo, ImportSummary, MessageRow, Stats, StatsSettings } from "./types";
+import type { ChatAnswer, ConversationInfo, ImportSummary, MessageRow, Stats, StatsSettings } from "./types";
 
 export const api = {
   listConversations: () => invoke<ConversationInfo[]>("list_conversations"),
@@ -16,5 +16,7 @@ export const api = {
     invoke<MessageRow[]>("get_messages", { id, startId, limit }),
   searchMessages: (id: string, query: string, limit = 200) =>
     invoke<MessageRow[]>("search_messages", { id, query, limit }),
+  chatAsk: (id: string, question: string) => invoke<ChatAnswer>("chat_ask", { id, question }),
+  chatExamples: (id: string) => invoke<string[]>("chat_examples", { id }),
   locateDate: (id: string, date: string) => invoke<number | null>("locate_date", { id, date }),
 };
