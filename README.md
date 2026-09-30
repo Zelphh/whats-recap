@@ -27,7 +27,7 @@ crates/
   core-media     figurinhas (SHA-256, dHash, miniaturas) e áudios (duração Opus) lidos do .zip
   synth          gerador de conversas sintéticas (demos e testes sem dados reais)
 src-tauri/       app Tauri: commands, importação em background com eventos de progresso
-src/             React + Vite + TS: importação, dashboard (ECharts), visualizador (react-virtuoso)
+src/             React + Vite + TS: importação, dashboard (gráficos em SVG), visualizador (react-virtuoso)
 ```
 
 Cada conversa importada vira `<app_data>/conversations/<id>.db`

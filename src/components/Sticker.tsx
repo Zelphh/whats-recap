@@ -30,7 +30,7 @@ export function Sticker({ id, file, size = 56, label }: { id: string; file: stri
   if (url === null) return <div className="sticker missing" style={{ width: size, height: size }} title="Arquivo indisponível">?</div>;
   return (
     <div className="sticker" style={{ width: size, height: size }}>
-      {url && <img src={url} alt={label} width={size} height={size} />}
+      {url && <img src={url} alt={label} width={size} height={size} loading="lazy" decoding="async" />}
     </div>
   );
 }

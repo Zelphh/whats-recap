@@ -1,42 +1,48 @@
 import { useEffect, useState } from "react";
 
-/** Cores dos gráficos lidas dos tokens CSS, para acompanhar o modo claro/escuro. */
-export interface ChartTheme {
-  dark: boolean;
-  series: [string, string];
-  text: string;
-  text2: string;
-  muted: string;
-  grid: string;
-  axis: string;
-  surface: string;
+type Theme = "light" | "dark";
+
+const KEY = "whatsrecap-theme";
+const mq = window.matchMedia("(prefers-color-scheme: dark)");
+
+function stored(): Theme | null {
+  try {
+    const v = localStorage.getItem(KEY);
+    return v === "light" || v === "dark" ? v : null;
+  } catch {
+    return null;
+  }
 }
 
-function read(): ChartTheme {
-  const s = getComputedStyle(document.documentElement);
-  const v = (name: string) => s.getPropertyValue(name).trim();
-  return {
-    dark: window.matchMedia("(prefers-color-scheme: dark)").matches,
-    series: [v("--series-1"), v("--series-2")],
-    text: v("--text"),
-    text2: v("--text-2"),
-    muted: v("--muted"),
-    grid: v("--grid"),
-    axis: v("--axis"),
-    surface: v("--surface"),
-  };
-}
+/** Tema atual: a escolha salva ou, sem escolha, o do sistema. A troca vira `data-theme` no <html>. */
+export function useTheme() {
+  const [choice, setChoice] = useState<Theme | null>(stored);
+  const [system, setSystem] = useState<Theme>(mq.matches ? "dark" : "light");
 
-export function useChartTheme(): ChartTheme {
-  const [theme, setTheme] = useState(read);
   useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => setTheme(read());
+    const onChange = () => setSystem(mq.matches ? "dark" : "light");
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, []);
-  return theme;
+
+  useEffect(() => {
+    if (choice) document.documentElement.dataset.theme = choice;
+    else delete document.documentElement.dataset.theme;
+  }, [choice]);
+
+  const theme = choice ?? system;
+  const toggle = () => {
+    const next: Theme = theme === "dark" ? "light" : "dark";
+    try {
+      localStorage.setItem(KEY, next);
+    } catch {
+      // Sem armazenamento, a escolha vale só para esta sessão.
+    }
+    setChoice(next);
+  };
+  return { theme, toggle };
 }
 
 /** Cor do autor pelo índice (a cor segue a pessoa, nunca a posição no ranking). */
-export const authorVar = (i: number) => `var(--series-${i + 1})`;
+export const authorVar = (i: number) => `var(--p${i + 1})`;
+export const authorSoft = (i: number) => `var(--p${i + 1}s)`;

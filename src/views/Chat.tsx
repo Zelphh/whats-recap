@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { Dot, Icon } from "../components/ui";
 import { fmtDate, fmtTime } from "../format";
 import type { ChatAnswer, ImportSummary, ToolCall } from "../types";
 
@@ -51,8 +52,8 @@ function HowCalculated({ tool }: { tool: ToolCall }) {
   ].filter(Boolean);
   return (
     <div className="how">
-      <span className="badge">{TOOL_LABEL[tool.tool] ?? tool.tool}</span>
-      {parts.length > 0 && <span className="hint">{parts.join(" · ")}</span>}
+      <span className="chip" style={{ fontSize: 12 }}>{TOOL_LABEL[tool.tool] ?? tool.tool}</span>
+      {parts.length > 0 && <span>{parts.join(" · ")}</span>}
     </div>
   );
 }
@@ -92,23 +93,22 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage }: Props) {
     <div className="chat">
       <div className="chat-scroll">
         <div className="chat-inner">
-          <div>
-            <h1>Chat</h1>
-            <p className="subtitle">
+          <div className="page-head reveal">
+            <div className="kicker">pergunte sobre a conversa</div>
+            <h1 className="title">Chat</h1>
+            <p className="lead">
               Pergunte sobre números da conversa entre {summary.authors.join(" e ")}. As respostas são calculadas a partir
               das mensagens; nada sai do seu computador.
             </p>
           </div>
 
           {turns.length === 0 && (
-            <div className="card">
-              <h3>Experimente perguntar</h3>
-              <div className="chips">
-                {examples.map((ex) => (
-                  <button key={ex} className="chip" onClick={() => ask(ex)}>{ex}</button>
-                ))}
+            <div className="card r-a reveal" style={{ "--i": 1 } as React.CSSProperties}>
+              <div className="label">Experimente perguntar</div>
+              <div className="suggest">
+                {examples.map((ex) => <button key={ex} onClick={() => ask(ex)}>{ex}</button>)}
               </div>
-              <p className="hint" style={{ marginTop: 12 }}>
+              <p className="note">
                 Por enquanto o chat entende perguntas de contagem (quantas vezes, quem mais, qual mês, horários, tempo de
                 resposta). Perguntas sobre o conteúdo e perguntas livres chegam com o modelo de linguagem.
               </p>
@@ -118,20 +118,25 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage }: Props) {
           {turns.map((t, i) => (
             <div key={i} className="turn">
               <div className="q-bubble">{t.question}</div>
-              {!t.answer && !t.error && <div className="a-card pending">Calculando…</div>}
-              {t.error && <div className="a-card error">{t.error}</div>}
+              {!t.answer && !t.error && <div className="a-bubble pending">Calculando…</div>}
+              {t.error && <div className="a-bubble error" role="alert">{t.error}</div>}
               {t.answer && (
-                <div className="a-card">
-                  {ROUTE_NOTE[t.answer.route] && <span className="badge" style={{ marginBottom: 8 }}>{ROUTE_NOTE[t.answer.route]}</span>}
+                <div className="a-bubble">
+                  {ROUTE_NOTE[t.answer.route] && <span className="chip lime" style={{ fontSize: 12 }}>{ROUTE_NOTE[t.answer.route]}</span>}
                   <p className="a-text">{t.answer.text}</p>
                   {t.answer.citations.length > 0 && (
                     <div className="citations">
-                      {t.answer.citations.map((c) => (
-                        <button key={c.id} className="result" onClick={() => onOpenMessage(c.id)}>
-                          <div className="meta">#{c.id} · {c.author ?? "sistema"} · {fmtDate(c.ts)} {fmtTime(c.ts)}</div>
-                          <div>{(c.text ?? "").slice(0, 160)}</div>
-                        </button>
-                      ))}
+                      {t.answer.citations.map((c) => {
+                        const a = c.author ? summary.authors.indexOf(c.author) : -1;
+                        return (
+                          <button key={c.id} className="result" onClick={() => onOpenMessage(c.id)}>
+                            <span className="meta">
+                              <b>#{c.id}</b>·{a >= 0 && <Dot i={a} />}{c.author ?? "sistema"} · {fmtDate(c.ts)} {fmtTime(c.ts)}
+                            </span>
+                            <span className="snip">{(c.text ?? "").slice(0, 160)}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                   {t.answer.tool && <HowCalculated tool={t.answer.tool} />}
@@ -144,21 +149,22 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage }: Props) {
       </div>
 
       <form
-        className="chat-input"
+        className="ask-bar"
         onSubmit={(e) => {
           e.preventDefault();
           ask(question);
         }}
       >
         <input
-          className="input"
           placeholder="Ex.: quantas vezes a gente falou “saudade” em 2024?"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           disabled={busy}
           aria-label="Pergunta"
         />
-        <button className="btn primary" type="submit" disabled={busy || !question.trim()}>Perguntar</button>
+        <button className="send" type="submit" disabled={busy || !question.trim()} aria-label="Perguntar">
+          <Icon name="send" size={18} stroke={2.2} />
+        </button>
       </form>
     </div>
   );
