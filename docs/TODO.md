@@ -32,14 +32,15 @@ compila o app e passa em `cargo test --workspace`.
 
 ### Achados que mudam o app
 
-- [ ] **Ordem das chaves no `tool_schema`.** O workspace serializa JSON com chaves em ordem
-      alfabética, então o schema chega ao llama.cpp com `"args"` antes de `"tool"` e a gramática
-      obriga o modelo a preencher os argumentos antes de escolher a ferramenta. Com `"tool"`
-      primeiro, a ferramenta certa sobe para 37–40/40 em todos os modelos (Qwen 9B v2: 14 → 39/40).
-      Corrigir em `crates/core-chat/src/llm.rs` (ex.: `serde_json` com `preserve_order`, conferindo
-      o impacto no resto do workspace) e no evals.
-- [ ] **Normalizar datas da `ToolCall`.** `from`/`to` iguais aos limites da conversa equivalem a
-      omitir; descartar no código. Com isso o acerto exato de B vai a 65–84% (era 41–77%).
+- [x] **Ordem das chaves no `tool_schema`.** O schema chegava ao llama.cpp com `"args"` antes de
+      `"tool"` (chaves em ordem alfabética), e o modelo preenchia os argumentos antes de escolher a
+      ferramenta. Corrigido com `serde_json/preserve_order` no `core-chat` + teste
+      `tool_schema_puts_tool_before_args`.
+- [x] **Normalizar datas da `ToolCall`.** `ToolCall::without_redundant_range` descarta `from`/`to`
+      que não restringem nada. Com as duas correções, B no Qwen 9B (v2) foi de 14% para 76%.
+- [ ] **Usar `without_redundant_range` no caminho do LLM** (fase 8), antes de executar a ferramenta
+- [ ] **Prompt de B:** "quem…?" ainda vem com `author`, "eu" vira uma das pessoas, `weekday` ×
+      `day`/`week`, "ano passado" vira os últimos 12 meses em vez do ano civil
 - [ ] **Flash attention por modelo.** No Vulkan/Windows, `-fa on` deixa os Qwen 2–2,5× mais lentos
       no `llama-server` (modo completo 5,7 h → 2,4 h no 4B); o Gemma é o contrário (geração cai de
       32 para 19 tok/s sem FA). O sidecar precisa de flags por modelo.

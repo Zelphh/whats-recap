@@ -100,6 +100,27 @@ impl ToolCall {
             | ToolCall::ResponseTime { author, .. } => author.as_deref(),
         }
     }
+
+    /// Descarta `from`/`to` que não restringem nada (antes da primeira ou depois da última data da
+    /// conversa). O LLM costuma preencher o período inteiro quando a pergunta não fala de datas; o
+    /// resultado é o mesmo, mas a interpretação mostrada ao usuário fica poluída.
+    pub fn without_redundant_range(mut self, first: NaiveDate, last: NaiveDate) -> Self {
+        match &mut self {
+            ToolCall::CountWord { from, to, .. }
+            | ToolCall::MessagesByHour { from, to, .. }
+            | ToolCall::MessagesByPeriod { from, to, .. }
+            | ToolCall::ResponseTime { from, to, .. } => {
+                if from.is_some_and(|f| f <= first) {
+                    *from = None;
+                }
+                if to.is_some_and(|t| t >= last) {
+                    *to = None;
+                }
+            }
+            ToolCall::FirstOccurrence { .. } => {}
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
