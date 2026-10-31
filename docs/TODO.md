@@ -50,12 +50,14 @@ compila o app e passa em `cargo test --workspace`.
 - [ ] Prompts vencedores do benchmark de volta para `crates/core-chat/src/llm.rs`
       (se a `v2` vencer: data de hoje no prompt, saída "nenhuma ferramenta", `authors` e datas
       legíveis no `ToolResult`)
-- [ ] Cliente HTTP do `llama-server` com `response_format: json_schema` (base: `client.rs` do evals)
+- [x] Crate `core-llm`: cliente com `response_format: json_schema` e `llama-server` como processo
+      filho (porta livre, espera o `/health`, sem janela de console, encerra no `Drop`)
+- [x] Example `ask` e teste `--ignored` do `core-llm` com o Qwen3.5 9B na RX 7600: carga em ~9 s,
+      ~2 s por pergunta, ferramentas e datas certas
 - [ ] `llama-server` como sidecar do Tauri
   - [ ] Binário em `externalBin` com o sufixo do target (`llama-server-x86_64-pc-windows-msvc.exe`)
   - [ ] DLLs do ggml/Vulkan como recursos do bundle
-  - [ ] Subir sem janela de console (`CREATE_NO_WINDOW`)
-  - [ ] Iniciar sob demanda, `/health`, porta livre, encerrar ao fechar o app
+  - [ ] Iniciar sob demanda (primeira pergunta que precisar do LLM) e encerrar ao fechar o app
   - [ ] Flags do Qwen3.5 9B: `-ngl 99 -c 16384 -fa off --reasoning off` (ajustar se o teste de
         VRAM pedir `-c 8192`/`-ctk q8_0`)
   - [ ] Fallback para o 4B (ou CPU) se a GPU não tiver VRAM livre suficiente

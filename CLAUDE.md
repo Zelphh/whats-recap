@@ -62,7 +62,10 @@ Pipeline em crates do workspace (`crates/*` + `src-tauri`), cada um dependendo d
 5. **core-chat** — chat tipo 1 (perguntas quantitativas): `router::route` → `intent::interpret`
    (heurística) → `tools::Conversation::execute` (consulta SQL) → `answer::compose` (template com os
    números). `llm.rs` guarda os schemas/prompts para quando o LLM entrar nos casos não resolvidos.
-6. **synth** — gerador de conversas sintéticas (com mídia real WebP/Ogg) e o anonimizador de fixtures.
+6. **core-llm** — acesso ao modelo local: sobe o `llama-server` (llama.cpp) como processo filho e
+   chama `/v1/chat/completions` com saída restrita por JSON schema. Genérico (não conhece o chat).
+   Testes usam um servidor HTTP falso; o que carrega o modelo de verdade é `#[ignore]` e o example `ask`.
+7. **synth** — gerador de conversas sintéticas (com mídia real WebP/Ogg) e o anonimizador de fixtures.
 
 **src-tauri/src/lib.rs** — todos os `#[tauri::command]`. Trabalho pesado roda em `blocking(...)`;
 a importação é um job em background com eventos de progresso e cancelamento (`ImportState`).
