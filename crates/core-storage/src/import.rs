@@ -118,8 +118,12 @@ pub fn import_new(
                     let m = m?;
                     id += 1;
                     let ts = m.ts.and_utc().timestamp();
-                    first_ts = first_ts.min(ts);
-                    last_ts = last_ts.max(ts);
+                    // O período da conversa é o das mensagens das pessoas: avisos de sistema
+                    // (criptografia, troca de número) podem vir meses antes da primeira mensagem.
+                    if m.author.is_some() {
+                        first_ts = first_ts.min(ts);
+                        last_ts = last_ts.max(ts);
+                    }
                     let session = builder.push(id, ts);
                     st.execute(params![
                         id,
@@ -176,8 +180,8 @@ pub fn import_new(
         date_order: format.order,
         authors: format.authors,
         message_count: count,
-        first_ts: if count > 0 { first_ts } else { 0 },
-        last_ts: if count > 0 { last_ts } else { 0 },
+        first_ts: if first_ts <= last_ts { first_ts } else { 0 },
+        last_ts: if first_ts <= last_ts { last_ts } else { 0 },
         session_count: sessions.len() as i64,
         session_gap_secs: opts.session_gap_secs,
         imported_at: std::time::SystemTime::now()

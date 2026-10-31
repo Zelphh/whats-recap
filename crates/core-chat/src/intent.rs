@@ -155,23 +155,28 @@ pub fn first_name(author: &str) -> &str {
         .unwrap_or_default()
 }
 
-/// Autor mencionado pelo primeiro nome, se só um for citado (e fora da palavra procurada).
+/// Nome que o WhatsApp dá ao dono do celular em alguns exports.
+const SELF_NAMES: &[&str] = &["voce", "you"];
+
+/// Primeira pessoa na pergunta ("eu disse", "falei"): aponta para o autor "Você".
+const FIRST_PERSON: &[&str] = &["eu", "falei", "escrevi", "mandei", "usei", "digitei", "chamei"];
+
+/// Autor mencionado pelo primeiro nome (ou "eu", se um dos autores for "Você"), se só um for
+/// citado. A palavra procurada não conta: "eu" em "eu disse 'eu te amo'" só vale uma vez.
 fn mentioned_author(q: &str, authors: &[String], exclude: Option<&str>) -> Option<String> {
-    let excluded: Vec<String> = exclude
-        .map(|w| WORD_RE.find_iter(&fold(w)).map(|m| m.as_str().to_string()).collect())
-        .unwrap_or_default();
-    let words: Vec<&str> = WORD_RE
-        .find_iter(q)
-        .map(|m| m.as_str())
-        .filter(|w| !excluded.iter().any(|e| e == w))
-        .collect();
+    let q = match exclude {
+        Some(w) => q.replacen(&fold(w), " ", 1),
+        None => q.to_string(),
+    };
+    let words: Vec<&str> = WORD_RE.find_iter(&q).map(|m| m.as_str()).collect();
     let hits: Vec<&String> = authors
         .iter()
         .filter(|a| {
             // O nome pode ter mais de uma palavra para o `WORD_RE` ("l'amour" → "l", "amour").
             let name = fold(first_name(a));
             let parts: Vec<&str> = WORD_RE.find_iter(&name).map(|m| m.as_str()).collect();
-            !parts.is_empty() && words.windows(parts.len()).any(|w| w == parts.as_slice())
+            let named = !parts.is_empty() && words.windows(parts.len()).any(|w| w == parts.as_slice());
+            named || (SELF_NAMES.contains(&fold(a).trim()) && words.iter().any(|w| FIRST_PERSON.contains(w)))
         })
         .collect();
     (hits.len() == 1).then(|| hits[0].clone())
@@ -457,6 +462,11 @@ mod tests {
             }
         );
         assert_eq!(first_name("💚 Ana Souza"), "Ana");
+        let (c, _) = interpret("Quantas vezes eu disse 'eu te amo'", &authors).unwrap();
+        assert_eq!(c.author(), Some("Você"));
+        assert!(matches!(&c, ToolCall::CountWord { word, .. } if word == "eu te amo"));
+        let (c, _) = interpret("Quantas vezes ela falou 'eu te amo'", &authors).unwrap();
+        assert_eq!(c.author(), None);
         assert_eq!(target_word("e o copo d'água?", "e o copo d'agua?"), None);
     }
 

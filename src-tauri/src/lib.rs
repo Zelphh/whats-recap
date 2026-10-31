@@ -340,6 +340,20 @@ async fn chat_ask(app: AppHandle, id: String, question: String) -> CmdResult<cor
     .await
 }
 
+/// Situação do modelo: `"off"` (arquivos ausentes, só regras fixas), `"idle"` (ainda não carregado;
+/// a próxima pergunta livre leva ~9 s a mais) ou `"ready"`.
+#[tauri::command]
+fn llm_status(state: tauri::State<LlmState>) -> &'static str {
+    if llm_files().is_none() {
+        return "off";
+    }
+    // Ocupado = carregando ou respondendo outra pergunta.
+    match state.server.try_lock() {
+        Ok(server) if server.is_some() => "ready",
+        _ => "idle",
+    }
+}
+
 /// Perguntas de exemplo com os nomes da conversa.
 #[tauri::command]
 async fn chat_examples(app: AppHandle, id: String) -> CmdResult<Vec<String>> {
@@ -359,6 +373,7 @@ pub fn run() {
             get_sticker_thumb,
             chat_ask,
             chat_examples,
+            llm_status,
             delete_conversation,
             get_stats,
             get_settings,

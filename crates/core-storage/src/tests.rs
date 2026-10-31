@@ -34,6 +34,38 @@ fn import(dir: &Path, chat: &str) -> Result<(Db, ImportSummary)> {
 }
 
 #[test]
+fn period_ignores_system_messages() {
+    let dir = tmp("period");
+    let chat = format!(
+        "01/01/2023 10:00 - As mensagens são protegidas com a criptografia de ponta a ponta.
+{CHAT}"
+    );
+    let (db, s) = import(&dir, &chat).unwrap();
+    let ts = |d: &str| {
+        chrono::NaiveDateTime::parse_from_str(d, "%d/%m/%Y %H:%M")
+            .unwrap()
+            .and_utc()
+            .timestamp()
+    };
+    assert_eq!(
+        (s.first_ts, s.last_ts),
+        (ts("12/01/2023 08:00"), ts("13/01/2023 09:00"))
+    );
+
+    // Bancos antigos: a migração v3 recalcula o período do resumo.
+    db.conn()
+        .execute_batch(
+            "UPDATE meta SET value = json_set(value, '$.firstTs', 0) WHERE key = 'summary';
+             PRAGMA user_version = 2;",
+        )
+        .unwrap();
+    drop(db);
+    let db = Db::open(dir.join("chat.db")).unwrap();
+    assert_eq!(db.summary().unwrap().first_ts, ts("12/01/2023 08:00"));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn import_and_query() {
     let dir = tmp("basic");
     let (mut db, s) = import(&dir, CHAT).unwrap();

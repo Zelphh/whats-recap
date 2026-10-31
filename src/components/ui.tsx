@@ -23,6 +23,8 @@ export const ICONS = {
   sticker: "M4 4h16v9l-7 7H4zM13 20v-7h7",
   play: "M8 5v14l11-7z",
   blocked: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM5.6 5.6l12.8 12.8",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  chevron: "M9 6l6 6-6 6",
 } as const;
 
 export function Icon({ name, size = 20, stroke = 1.8 }: { name: keyof typeof ICONS; size?: number; stroke?: number }) {

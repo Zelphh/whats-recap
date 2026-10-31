@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Dot, Icon } from "../components/ui";
 import { fmtDate, fmtTime } from "../format";
-import type { ChatAnswer, ImportSummary, ToolCall } from "../types";
+import type { ChatAnswer, ImportSummary, LlmStatus, ToolCall } from "../types";
 
 export interface ChatTurn {
   question: string;
@@ -35,6 +35,25 @@ const ROUTE_NOTE: Partial<Record<ChatAnswer["route"], string>> = {
   global: "Pergunta sobre a conversa inteira · fora do escopo",
 };
 
+// Depois disso sem resposta, a pergunta provavelmente foi para o modelo (as regras respondem em ms).
+const SLOW_MS = 700;
+
+const PENDING: Record<LlmStatus, string> = {
+  off: "Calculando…",
+  idle: "Carregando o modelo de linguagem… só na primeira pergunta livre, leva uns 10 segundos.",
+  ready: "Interpretando a pergunta com o modelo de linguagem…",
+};
+
+/** "Calculando…" e, se demorar, o que o modelo está fazendo. */
+function Pending({ llm }: { llm: LlmStatus }) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), SLOW_MS);
+    return () => clearTimeout(t);
+  }, []);
+  return <div className="a-bubble pending" role="status">{slow ? PENDING[llm] : "Calculando…"}</div>;
+}
+
 function isoToBr(iso: string) {
   const [y, m, d] = iso.split("-");
   return `${d}/${m}/${y}`;
@@ -63,6 +82,7 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage }: Props) {
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [examples, setExamples] = useState<string[]>([]);
+  const [llm, setLlm] = useState<LlmStatus>("off");
   const end = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -78,6 +98,7 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage }: Props) {
     if (!text || busy) return;
     setQuestion("");
     setBusy(true);
+    api.llmStatus().then(setLlm).catch(() => setLlm("off"));
     const index = turns.length;
     setTurns((t) => [...t, { question: text }]);
     try {
@@ -119,7 +140,7 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage }: Props) {
           {turns.map((t, i) => (
             <div key={i} className="turn">
               <div className="q-bubble">{t.question}</div>
-              {!t.answer && !t.error && <div className="a-bubble pending">Calculando…</div>}
+              {!t.answer && !t.error && <Pending llm={llm} />}
               {t.error && <div className="a-bubble error" role="alert">{t.error}</div>}
               {t.answer && (
                 <div className="a-bubble">

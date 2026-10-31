@@ -14,3 +14,4 @@ ureq = { version = "3.4.2", features = ["json"] }
 # O example e o teste com modelo real usam os contratos do chat.
 chrono = "0.4.45"
 core-chat = { version = "0.1.0", path = "../core-chat" }
+core-storage = { version = "0.1.0", path = "../core-storage" }

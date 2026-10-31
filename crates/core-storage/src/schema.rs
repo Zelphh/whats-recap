@@ -2,7 +2,7 @@ use crate::{Result, SessionRow};
 use rusqlite::{Connection, params};
 use serde::Serialize;
 
-pub const VERSION: i32 = 2;
+pub const VERSION: i32 = 3;
 
 pub(crate) const CREATE: &str = r#"
 CREATE TABLE meta (
@@ -94,6 +94,11 @@ INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');
 pub(crate) const MIGRATIONS: &[&str] = &[
     // v1 → v2: miniaturas de figurinhas (fase 4).
     "CREATE TABLE media_thumbs (sha256 TEXT PRIMARY KEY, png BLOB NOT NULL);",
+    // v2 → v3: início e fim do resumo sem as mensagens de sistema.
+    "UPDATE meta SET value = json_set(value,
+         '$.firstTs', (SELECT MIN(ts) FROM messages WHERE author IS NOT NULL),
+         '$.lastTs', (SELECT MAX(ts) FROM messages WHERE author IS NOT NULL))
+     WHERE key = 'summary' AND EXISTS (SELECT 1 FROM messages WHERE author IS NOT NULL);",
 ];
 
 pub(crate) fn meta_set<T: Serialize + ?Sized>(conn: &Connection, key: &str, value: &T) -> Result<()> {

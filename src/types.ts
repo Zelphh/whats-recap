@@ -179,3 +179,6 @@ export interface ChatAnswer {
   interpretedBy: "heuristic" | "llm" | null;
   citations: MessageRow[];
 }
+
+/** Modelo de linguagem do chat: ausente (só regras fixas), ainda não carregado ou pronto. */
+export type LlmStatus = "off" | "idle" | "ready";

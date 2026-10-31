@@ -10,7 +10,7 @@ compila o app e passa em `cargo test --workspace`.
 `Q4_K_M`. Números e achados em `../whatsrecap-evals/COMPARACAO-MODELOS.md`.
 
 - [x] Decidir o modelo: Qwen3.5 (foco em perguntas gerais; o Gemma perdeu em RAG, roteador e redação)
-- [ ] Commitar o suporte a Windows no evals (caminho do `core-chat`, `.exe`, encerramento do
+- [x] Commitar o suporte a Windows no evals (caminho do `core-chat`, `.exe`, encerramento do
       servidor, hardware/VRAM via `typeperf`, `scripts/setup-llama-cpp.ps1`, perfil `rx7600-nofa`)
 - [x] llama.cpp `b11938` (Vulkan, Windows) em `vendor/`; `evals hw` → `"is_target": true`
 - [x] Baixados: `qwen3.5-4b-q4km`, `qwen3.5-9b-iq4xs`, `gemma4-e4b-q4_0`, `e5-small-q8`
@@ -76,9 +76,25 @@ compila o app e passa em `cargo test --workspace`.
 - [x] Seleção de ferramenta pelo LLM quando a heurística não entende a pergunta (`Interpreter::Llm`,
       "interpretado pelo modelo" no "como calculei")
 - [x] Resposta "fora do escopo" quando nenhuma ferramenta serve (`{"tool":"none"}`)
-- [ ] Testar no app (`pnpm tauri dev`) com perguntas que as regras não entendem (usa a GPU)
-- [ ] Aviso na interface enquanto o modelo carrega na primeira pergunta livre (~9 s)
+- [x] Testar no app e com o example `chat` do `core-llm` (fluxo completo numa conversa sintética).
+      Achados (2026-10-31), somam-se ao item de prompt de B:
+  - [ ] "de semana ou no fim de semana?" → `week` em vez de `weekday`
+  - [ ] "quantas figurinhas ela mandou?" → `count_word "sticker"` em vez de `none`
+  - [ ] "verão passado" → só `from` (falta o `to`); "época do ano" → `year` em vez de `month`
+  - [ ] "de noite ou de dia?": a resposta só traz a noite; o template precisa comparar as duas
+        partes do dia quando a pergunta tem "X ou Y"
+  - [ ] Latência: 5–7 s nas perguntas que passam pelo roteador e pela ferramenta (no benchmark era
+        ~2 s por chamada); medir prompt × geração no log
+- [x] Aviso na interface enquanto o modelo carrega na primeira pergunta livre (~9 s)
 - [ ] Redação pelo LLM (opcional): manter os templates de `answer.rs` como padrão/fallback
+- [ ] Ferramenta `list_messages` (filtro exato, sem contagem nem RAG): autor, faixa de horas, datas
+      e palavra opcional. Responde o total com algumas citações e um link para a lista completa no
+      visualizador. Ex.: "quais foram as mensagens da Ana entre 7h e 8h da manhã?"
+  - [ ] Roteador: "quais foram as mensagens de X …" com horário/data/autor vai para o tipo 1, não
+        para conteúdo (hoje cai no quebra-galho de `retrieval_answer`)
+  - [ ] Schema e prompt da seleção de ferramenta no `llm.rs` + caso no dataset B do evals
+- [x] "eu"/"eu disse" na pergunta apontar para o autor "Você" (export do iOS/Android do próprio
+      dono), sem confundir com o "eu" da palavra procurada ("eu te amo")
 
 ## 4. Fase 6 — Desculpas (feature 19)
 
@@ -106,6 +122,8 @@ compila o app e passa em `cargo test --workspace`.
 
 ## Fora do LLM
 
+- [x] Início e fim do resumo ignoram mensagens de sistema (avisos meses antes da primeira mensagem
+      faziam a tela inicial e o chat discordarem do dashboard); migração v3 corrige bancos antigos
 - [ ] Validar o parser com exports reais (Android e iOS, com e sem mídia), anonimizados com
       `cargo run -p synth --bin anonymize`; nada sai da máquina nem vai para o git
 - [ ] README: pré-requisitos e caminhos do Windows (WebView2, `%APPDATA%\dev.whatsrecap.app`)
