@@ -1,10 +1,12 @@
-//! Contrato com o LLM (fase 5): schemas JSON para saída estruturada no `llama-server`
-//! (`json_schema`) e os prompts. O cliente em si ainda não existe; este módulo define o que
-//! será pedido ao modelo e garante que a resposta desserializa para os tipos do chat.
+//! Contrato com o LLM: schemas JSON para saída estruturada no `llama-server` (`json_schema`) e
+//! os prompts. As versões daqui são as que venceram no `whatsrecap-evals` (Qwen3.5 9B, RX 7600):
+//! roteador com exemplos (98% de acerto) e seleção de ferramenta com a data de hoje e a saída
+//! "nenhuma ferramenta" (76% de acerto exato, 100% na ferramenta).
 
 use serde_json::{Value, json};
 
 /// Schema da classificação da pergunta: `{"type": "quantitative" | "retrieval" | "global"}`.
+/// Desserializa em [`crate::Route`] pelo campo `type`.
 pub fn router_schema() -> Value {
     json!({
         "type": "object",
@@ -14,8 +16,30 @@ pub fn router_schema() -> Value {
     })
 }
 
-/// Schema de [`crate::ToolCall`]. Os nomes das pessoas entram como `enum`, então o modelo
-/// não consegue inventar um autor.
+/// Prompt de sistema do roteador; a pergunta vai como mensagem do usuário.
+pub fn router_prompt() -> String {
+    "Você classifica perguntas sobre uma conversa de WhatsApp entre duas pessoas. Responda só com o tipo:\n\
+- quantitative: contagem, frequência, comparação ou estatística que dá para calcular (quantas vezes, quem manda \
+mais, que horas, qual mês, tempo de resposta, primeira vez que alguém disse algo).\n\
+- retrieval: pergunta pontual sobre o conteúdo de algum momento da conversa (o que alguém disse, quando combinaram \
+algo, onde foram).\n\
+- global: pede uma análise ou resumo da conversa inteira ou da relação (como evoluiu, resumo, melhor fase).\n\n\
+Exemplos:\n\
+\"quantas vezes ela me chamou de chato?\" → quantitative\n\
+\"quem puxa mais assunto de manhã?\" → quantitative\n\
+\"o que a gente decidiu sobre o aluguel?\" → retrieval\n\
+\"qual era o nome do restaurante que ele indicou?\" → retrieval\n\
+\"a gente brigava mais no começo?\" → global\n\
+\"me conta como foi nosso 2023\" → global"
+        .to_string()
+}
+
+/// `{"tool": "none", "args": {}}`: a pergunta não cabe em nenhuma ferramenta. Não é uma
+/// [`crate::ToolCall`]; quem chama trata antes de desserializar.
+pub const NO_TOOL: &str = "none";
+
+/// Schema de [`crate::ToolCall`] (mais a saída [`NO_TOOL`]). Os nomes das pessoas entram como
+/// `enum`, então o modelo não consegue inventar um autor.
 ///
 /// A ordem das chaves importa: o llama.cpp gera os campos na ordem das `properties`, então
 /// `"tool"` vem antes de `"args"` para o modelo escolher a ferramenta antes de preencher os
@@ -51,12 +75,14 @@ pub fn tool_schema(authors: &[String]) -> Value {
             ),
             tool("first_occurrence", json!({ "word": word, "author": author }), &["word"]),
             tool("response_time", json!({ "author": author, "from": date, "to": date }), &[]),
+            tool(NO_TOOL, json!({}), &[]),
         ]
     })
 }
 
-/// Prompt de sistema para escolher a ferramenta.
-pub fn tool_selection_prompt(authors: &[String], first_date: &str, last_date: &str) -> String {
+/// Prompt de sistema para escolher a ferramenta. Datas em `AAAA-MM-DD`; `today` resolve datas
+/// relativas ("ano passado").
+pub fn tool_selection_prompt(authors: &[String], first_date: &str, last_date: &str, today: &str) -> String {
     format!(
         "Você escolhe UMA ferramenta para responder a uma pergunta sobre uma conversa de WhatsApp entre {} \
 (de {first_date} a {last_date}). Você não lê a conversa: só escolhe a ferramenta e preenche os parâmetros.\n\n\
@@ -67,7 +93,12 @@ Ferramentas:\n\
 - first_occurrence(word, author?): a primeira mensagem com a palavra ou expressão.\n\
 - response_time(author?, from?, to?): tempo de resposta (média e mediana) por pessoa.\n\n\
 Regras: datas no formato AAAA-MM-DD, inclusivas; omita parâmetros não mencionados; \"author\" só quando a \
-pergunta for sobre uma pessoa específica (em \"quem...?\", compare as duas e omita).",
+pergunta for sobre uma pessoa específica (em \"quem...?\", compare as duas e omita).\n\n\
+Hoje é {today}. Converta datas relativas (\"ano passado\", \"mês passado\", \"no verão\") em intervalos \
+AAAA-MM-DD a partir de hoje; o verão vai de 21 de dezembro a 20 de março. Apelidos e pronomes (\"ela\", \"ele\", \
+\"a Aninha\") se referem a uma das duas pessoas pelo nome. Em count_word e first_occurrence, \"word\" é só a \
+palavra ou expressão procurada, sem aspas, como a pessoa escreveria. Se nenhuma ferramenta responde (ex.: brigas, \
+sentimentos, assuntos), use {{\"tool\":\"{NO_TOOL}\",\"args\":{{}}}}.",
         authors.join(" e ")
     )
 }
@@ -103,7 +134,8 @@ mod tests {
                 "messages_by_hour",
                 "messages_by_period",
                 "first_occurrence",
-                "response_time"
+                "response_time",
+                "none"
             ]
         );
         assert_eq!(
@@ -126,7 +158,7 @@ mod tests {
         // O texto enviado ao llama-server, não o Value: é a ordem serializada que vira gramática.
         let s = serde_json::to_string(&tool_schema(&["Ana".into(), "Bruno".into()])).unwrap();
         let branches = s.matches(r#""properties":{"tool":"#).count();
-        assert_eq!(branches, 5, "\"tool\" tem de vir antes de \"args\" em cada ramo: {s}");
+        assert_eq!(branches, 6, "\"tool\" tem de vir antes de \"args\" em cada ramo: {s}");
     }
 
     #[test]

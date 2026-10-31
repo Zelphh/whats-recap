@@ -364,12 +364,12 @@ p { margin: 0; }
 .bento > * { min-width: 0; }
 @media (min-width: 960px) {
   .bento { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .s-resumo, .s-nums, .s-rio, .s-curio, .s-hora, .s-semana, .s-resp, .s-midia { grid-column: span 6; }
+  .s-resumo, .s-nums, .s-rio, .s-cal, .s-curio, .s-hora, .s-semana, .s-resp, .s-midia { grid-column: span 6; }
   .s-quem, .s-longa, .s-words, .s-emo, .s-ex, .s-fig, .s-aud { grid-column: span 3; }
 }
 @media (min-width: 1380px) {
   .bento { grid-template-columns: repeat(12, minmax(0, 1fr)); }
-  .s-resumo { grid-column: span 7; } .s-nums { grid-column: span 5; } .s-rio { grid-column: span 12; }
+  .s-resumo { grid-column: span 7; } .s-nums { grid-column: span 5; } .s-rio, .s-cal { grid-column: span 12; }
   .s-quem { grid-column: span 5; } .s-longa { grid-column: span 4; } .s-curio { grid-column: span 3; }
   .s-hora { grid-column: span 5; } .s-semana { grid-column: span 7; } .s-resp { grid-column: span 6; }
   .s-words, .s-emo { grid-column: span 3; } .s-ex { grid-column: span 6; }
@@ -422,6 +422,10 @@ p { margin: 0; }
 .ticks span { position: absolute; top: 0; white-space: nowrap; }
 .day-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 6px; cursor: grab; }
 .day-scroll.dragging { cursor: grabbing; user-select: none; }
+.cal-scroll { overflow-x: auto; overflow-y: hidden; }
+.cal-legend { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--mute); }
+.cal-legend i { width: 13px; height: 13px; border-radius: 3px; }
+.cal-legend span { padding: 0 4px; }
 
 .share { display: flex; gap: 6px; height: 44px; }
 .share div { display: flex; align-items: center; color: var(--on-p); font-weight: 800; font-size: 14px; white-space: nowrap; overflow: hidden; min-width: 8px; }
@@ -451,7 +455,7 @@ p { margin: 0; }
 .curio .next { font-size: 13px; font-weight: 800; opacity: 0.75; }
 
 .radial { display: flex; justify-content: center; }
-.radial svg { width: 100%; max-width: 340px; display: block; }
+.radial svg { width: 100%; max-width: 460px; display: block; }
 .radial .wedges { transform-origin: 150px 150px; animation: spin-in 1.2s cubic-bezier(0.2, 1.1, 0.3, 1) 0.15s backwards; }
 .radial path { transition: opacity 0.2s; }
 .hour-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; font-size: 12.5px; font-variant-numeric: tabular-nums; }

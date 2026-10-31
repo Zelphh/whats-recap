@@ -223,6 +223,112 @@ function DayRiver({ values, max, ticks, hover, setHover, n, zoom }: RiverProps &
   );
 }
 
+const MONTHS_SHORT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+const CAL_STEP = 15; // célula de 12 + espaço de 3
+const CAL_LEFT = 28;
+const CAL_TOP = 16;
+const DAY_MS = 86_400_000;
+
+/** Tons do calendário: 0 = nenhum dia; 1–4 = do mais claro ao verde do app. */
+const calFill = (level: number) =>
+  level === 0 ? "var(--surf2)" : `color-mix(in oklab, var(--accent) ${[0, 30, 55, 78, 100][level]}%, var(--surf2))`;
+
+/** Quartis dos dias com mensagem (a escala vale para a conversa toda, então os anos são comparáveis). */
+function quartiles(totals: number[]) {
+  const s = totals.filter((v) => v > 0).sort((a, b) => a - b);
+  if (s.length === 0) return [1, 1, 1];
+  return [0.25, 0.5, 0.75].map((q) => s[Math.min(s.length - 1, Math.floor(q * s.length))]);
+}
+
+/** Quadro estilo "contribuições do GitHub": um quadrado por dia, semanas em colunas, um ano por vez. */
+export function CalendarCard({ stats }: { stats: Stats }) {
+  const { authors, daily } = stats;
+  const n = daily.values[0]?.length ?? 0;
+  const t0 = isoToTs(daily.start) * 1000;
+  const totals = useMemo(
+    () => Array.from({ length: n }, (_, i) => daily.values.reduce((s, row) => s + row[i], 0)),
+    [daily, n],
+  );
+  const q = useMemo(() => quartiles(totals), [totals]);
+  const firstYear = new Date(t0).getUTCFullYear();
+  const lastYear = new Date(t0 + Math.max(0, n - 1) * DAY_MS).getUTCFullYear();
+  const years = Array.from({ length: lastYear - firstYear + 1 }, (_, i) => firstYear + i);
+  const [year, setYear] = useState(lastYear);
+  const [hover, setHover] = useState<number | null>(null);
+
+  const cal = useMemo(() => {
+    const jan1 = Date.UTC(year, 0, 1);
+    const offset = new Date(jan1).getUTCDay(); // domingo = 0
+    const len = (Date.UTC(year + 1, 0, 1) - jan1) / DAY_MS;
+    const cells: { i: number; x: number; y: number; level: number }[] = [];
+    const months: { x: number; label: string }[] = [];
+    let active = 0, inRange = 0, streak = 0, best = 0;
+    for (let k = 0; k < len; k++) {
+      const col = Math.floor((k + offset) / 7);
+      const ts = jan1 + k * DAY_MS;
+      const d = new Date(ts);
+      if (d.getUTCDate() === 1) months.push({ x: CAL_LEFT + col * CAL_STEP, label: MONTHS_SHORT[d.getUTCMonth()] });
+      const i = Math.round((ts - t0) / DAY_MS);
+      if (i < 0 || i >= n) continue; // fora do período da conversa: sem quadrado
+      const v = totals[i];
+      const level = v === 0 ? 0 : 1 + q.filter((t) => v > t).length;
+      cells.push({ i, x: CAL_LEFT + col * CAL_STEP, y: CAL_TOP + ((k + offset) % 7) * CAL_STEP, level });
+      inRange++;
+      if (v > 0) {
+        active++;
+        best = Math.max(best, ++streak);
+      } else {
+        streak = 0;
+      }
+    }
+    const weeks = Math.ceil((len + offset) / 7);
+    return { cells, months, active, inRange, best, width: CAL_LEFT + weeks * CAL_STEP };
+  }, [year, t0, n, totals, q]);
+
+  const info = hover !== null
+    ? totals[hover] === 0
+      ? `${fmtDate(t0 / 1000 + hover * 86400)} · ninguém mandou nada`
+      : `${fmtDate(t0 / 1000 + hover * 86400)} · ${fmtInt(totals[hover])} msgs` +
+        (authors.length > 1 ? ` (${authors.map((a, i) => `${shortName(a)} ${fmtInt(daily.values[i][hover])}`).join(" · ")})` : "")
+    : `${fmtInt(cal.active)} de ${fmtInt(cal.inRange)} dias com conversa · maior sequência: ${fmtInt(cal.best)} ${cal.best === 1 ? "dia" : "dias"} seguidos`;
+
+  return (
+    <section className="card s-cal reveal">
+      <div className="spread" style={{ alignItems: "flex-start" }}>
+        <div>
+          <h3 className="card-title">Dias de conversa em {year}</h3>
+          <div className="chart-info" aria-live="polite">{info}</div>
+        </div>
+        {years.length > 1 && (
+          <Seg value={year} onChange={(y) => { setHover(null); setYear(y); }} options={years.map((y) => [y, String(y)])} label="Ano" />
+        )}
+      </div>
+      <div className="cal-scroll">
+        <svg viewBox={`0 0 ${cal.width} ${CAL_TOP + 7 * CAL_STEP}`} role="img" style={{ display: "block", width: "100%", minWidth: 640 }}
+          aria-label={`Mensagens por dia em ${year}`} onMouseLeave={() => setHover(null)}>
+          {cal.months.map((m) => <text key={m.label} x={m.x} y={10} fontSize="9" fill="var(--mute)">{m.label}</text>)}
+          {[["Seg", 1], ["Qua", 3], ["Sex", 5]].map(([l, r]) => (
+            <text key={l} x={0} y={CAL_TOP + (r as number) * CAL_STEP + 9} fontSize="9" fill="var(--mute)">{l}</text>
+          ))}
+          {cal.cells.map((c) => (
+            <rect key={c.i} x={c.x} y={c.y} width="12" height="12" rx="2.5" fill={calFill(c.level)}
+              stroke={hover === c.i ? "var(--ink)" : "none"} strokeWidth="1.2"
+              onMouseEnter={() => setHover(c.i)} />
+          ))}
+        </svg>
+      </div>
+      <div className="spread">
+        <p className="note">Os tons comparam cada dia com os outros dias desta conversa.</p>
+        <div className="cal-legend" aria-hidden>
+          <span>menos</span>
+          {[0, 1, 2, 3, 4].map((l) => <i key={l} style={{ background: calFill(l) }} />)}
+          <span>mais</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /** Relógio de 24h: uma cunha por hora, comprimento proporcional às mensagens. */
 export function HourRadial({ hourly, authors, split, peak }: {
   hourly: number[][]; authors: string[]; split: boolean; peak: number;

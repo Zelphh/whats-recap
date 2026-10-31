@@ -49,6 +49,12 @@ export function Viewer({ id, summary, jumpTo, onJumpHandled }: Props) {
   const [, setVersion] = useState(0);
   const list = useRef<VirtuosoHandle>(null);
   const [target, setTarget] = useState<number | null>(jumpTo);
+  // Posição ao abrir: a mensagem pedida ou o fim da conversa. Fica fixa porque o `jumpTo` volta a
+  // `null` logo depois, e o Virtuoso reposiciona a lista se essa prop mudar.
+  const [initial] = useState(() =>
+    jumpTo !== null ? { index: Math.max(0, jumpTo - 1), align: "center" as const } : { index: "LAST" as const, align: "end" as const },
+  );
+  const opened = useRef(jumpTo);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MessageRow[] | null>(null);
   const [searched, setSearched] = useState("");
@@ -90,11 +96,11 @@ export function Viewer({ id, summary, jumpTo, onJumpHandled }: Props) {
   }, [summary.messageCount]);
 
   useEffect(() => {
-    if (jumpTo !== null) {
-      // Espera o Virtuoso montar antes de rolar.
-      requestAnimationFrame(() => jump(jumpTo));
-      onJumpHandled();
-    }
+    if (jumpTo === null) return;
+    // A mensagem com que a tela abriu já está em `initial`; só rola para pedidos posteriores.
+    if (jumpTo !== opened.current) jump(jumpTo);
+    opened.current = null;
+    onJumpHandled();
   }, [jumpTo, jump, onJumpHandled]);
 
   const runSearch = useCallback(async (q: string) => {
@@ -170,7 +176,7 @@ export function Viewer({ id, summary, jumpTo, onJumpHandled }: Props) {
           <Virtuoso
             ref={list}
             totalCount={summary.messageCount}
-            initialTopMostItemIndex={jumpTo !== null ? { index: Math.max(0, jumpTo - 1), align: "center" } : 0}
+            initialTopMostItemIndex={initial}
             increaseViewportBy={600}
             components={LIST_COMPONENTS}
             rangeChanged={({ startIndex, endIndex }) => {

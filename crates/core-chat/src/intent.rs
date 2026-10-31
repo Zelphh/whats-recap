@@ -56,7 +56,10 @@ const MONTHS: [&str; 12] = [
     "dezembro",
 ];
 
-static QUOTED_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"["“”'‘’«»]([^"“”'‘’«»]{1,60})["“”'‘’«»]"#).unwrap());
+// Aspas fora de palavras: o apóstrofo de "l'amour" ou "d'água" não abre nem fecha citação.
+static QUOTED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:^|[^\p{L}\p{N}])["“”'‘’«»]([^"“”'‘’«»]{1,60})["“”'‘’«»](?:$|[^\p{L}\p{N}])"#).unwrap()
+});
 
 // Palavra depois do verbo: "falou amor", "disse a palavra saudade", "falou em viagem".
 static AFTER_VERB_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -144,6 +147,14 @@ pub fn target_word(original: &str, q: &str) -> Option<String> {
     (1..=3).contains(&n).then_some(w)
 }
 
+/// Primeiro nome do autor: a primeira parte com letras ou números ("💚 Ana" → "Ana").
+pub fn first_name(author: &str) -> &str {
+    author
+        .split_whitespace()
+        .find(|w| w.chars().any(char::is_alphanumeric))
+        .unwrap_or_default()
+}
+
 /// Autor mencionado pelo primeiro nome, se só um for citado (e fora da palavra procurada).
 fn mentioned_author(q: &str, authors: &[String], exclude: Option<&str>) -> Option<String> {
     let excluded: Vec<String> = exclude
@@ -157,8 +168,10 @@ fn mentioned_author(q: &str, authors: &[String], exclude: Option<&str>) -> Optio
     let hits: Vec<&String> = authors
         .iter()
         .filter(|a| {
-            let first = fold(a.split_whitespace().next().unwrap_or_default());
-            !first.is_empty() && words.contains(&first.as_str())
+            // O nome pode ter mais de uma palavra para o `WORD_RE` ("l'amour" → "l", "amour").
+            let name = fold(first_name(a));
+            let parts: Vec<&str> = WORD_RE.find_iter(&name).map(|m| m.as_str()).collect();
+            !parts.is_empty() && words.windows(parts.len()).any(|w| w == parts.as_slice())
         })
         .collect();
     (hits.len() == 1).then(|| hits[0].clone())
@@ -236,6 +249,31 @@ pub fn interpret(question: &str, authors: &[String]) -> Option<(ToolCall, Intent
         ));
     }
     None
+}
+
+/// O que a resposta deve destacar quando a ferramenta foi escolhida pelo LLM: os mesmos sinais
+/// que a heurística usa ("menos", parte do dia, "que horas"), lidos da pergunta original.
+pub fn intent_for(call: &ToolCall, question: &str) -> Intent {
+    let q = fold(question);
+    let most = !WORD_RE.find_iter(&q).any(|m| m.as_str() == "menos");
+    match call {
+        ToolCall::CountWord { .. } => Intent::CountWord,
+        ToolCall::FirstOccurrence { .. } => Intent::FirstOccurrence,
+        ToolCall::MessagesByPeriod { .. } => Intent::TopPeriod { most },
+        ToolCall::ResponseTime { author, .. } => Intent::ResponseTime {
+            compare: author.is_none(),
+        },
+        ToolCall::MessagesByHour { author, .. } => {
+            let hours = part_of_day(&q);
+            if PEAK_HOUR_RE.is_match(&q) && hours.is_none() {
+                Intent::PeakHour
+            } else if author.is_none() && WHO_MOST_RE.is_match(&q) {
+                Intent::WhoMost { most, hours }
+            } else {
+                Intent::TotalMessages { hours }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -403,6 +441,23 @@ mod tests {
             }
         );
         assert_eq!(i, Intent::ResponseTime { compare: false });
+    }
+
+    #[test]
+    fn names_with_apostrophe_and_emoji() {
+        let authors = vec!["Você".to_string(), "l'amour vrai 💚 🌼 💜".to_string()];
+        let (c, _) = interpret("Quantas vezes l'amour falou “amor”?", &authors).unwrap();
+        assert_eq!(
+            c,
+            ToolCall::CountWord {
+                word: "amor".into(),
+                author: Some(authors[1].clone()),
+                from: None,
+                to: None
+            }
+        );
+        assert_eq!(first_name("💚 Ana Souza"), "Ana");
+        assert_eq!(target_word("e o copo d'água?", "e o copo d'agua?"), None);
     }
 
     #[test]

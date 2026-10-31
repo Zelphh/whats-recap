@@ -38,7 +38,7 @@ compila o app e passa em `cargo test --workspace`.
       `tool_schema_puts_tool_before_args`.
 - [x] **Normalizar datas da `ToolCall`.** `ToolCall::without_redundant_range` descarta `from`/`to`
       que não restringem nada. Com as duas correções, B no Qwen 9B (v2) foi de 14% para 76%.
-- [ ] **Usar `without_redundant_range` no caminho do LLM** (fase 8), antes de executar a ferramenta
+- [x] **Usar `without_redundant_range` no caminho do LLM** (fase 8), antes de executar a ferramenta
 - [ ] **Prompt de B:** "quem…?" ainda vem com `author`, "eu" vira uma das pessoas, `weekday` ×
       `day`/`week`, "ano passado" vira os últimos 12 meses em vez do ano civil
 - [ ] **Flash attention por modelo.** No Vulkan/Windows, `-fa on` deixa os Qwen 2–2,5× mais lentos
@@ -47,17 +47,21 @@ compila o app e passa em `cargo test --workspace`.
 
 ## 2. Fase 5 — Infraestrutura de LLM no app
 
-- [ ] Prompts vencedores do benchmark de volta para `crates/core-chat/src/llm.rs`
-      (se a `v2` vencer: data de hoje no prompt, saída "nenhuma ferramenta", `authors` e datas
-      legíveis no `ToolResult`)
+- [x] Prompts vencedores (v2) de roteador e ferramenta em `crates/core-chat/src/llm.rs`: exemplos no
+      roteador; data de hoje, apelidos e saída "nenhuma ferramenta" na seleção. O `v1` do evals
+      passou a ser esse prompt
+- [ ] Redação (C): a v2 venceu (`authors` e datas legíveis no `ToolResult`), mas o app ainda usa
+      templates; só importa se a redação pelo LLM entrar
 - [x] Crate `core-llm`: cliente com `response_format: json_schema` e `llama-server` como processo
       filho (porta livre, espera o `/health`, sem janela de console, encerra no `Drop`)
-- [x] Example `ask` e teste `--ignored` do `core-llm` com o Qwen3.5 9B na RX 7600: carga em ~9 s,
+- [x] Example `ferramenta` e teste `--ignored` do `core-llm` com o Qwen3.5 9B na RX 7600: carga em ~9 s,
       ~2 s por pergunta, ferramentas e datas certas
 - [ ] `llama-server` como sidecar do Tauri
   - [ ] Binário em `externalBin` com o sufixo do target (`llama-server-x86_64-pc-windows-msvc.exe`)
   - [ ] DLLs do ggml/Vulkan como recursos do bundle
-  - [ ] Iniciar sob demanda (primeira pergunta que precisar do LLM) e encerrar ao fechar o app
+  - [x] Iniciar sob demanda (primeira pergunta que precisar do LLM) e encerrar ao fechar o app
+        (`LlmState` em `src-tauri`; por enquanto acha os arquivos por `WHATSRECAP_LLAMA_SERVER`/
+        `WHATSRECAP_MODEL` ou, em debug, na pasta do `whatsrecap-evals`)
   - [ ] Flags do Qwen3.5 9B: `-ngl 99 -c 16384 -fa off --reasoning off` (ajustar se o teste de
         VRAM pedir `-c 8192`/`-ctk q8_0`)
   - [ ] Fallback para o 4B (ou CPU) se a GPU não tiver VRAM livre suficiente
@@ -68,9 +72,12 @@ compila o app e passa em `cargo test --workspace`.
 
 ## 3. Fase 8 — Chat tipo 1 com LLM
 
-- [ ] Roteador: casos `Undecided` da heurística vão para o LLM (`router_schema`)
-- [ ] Seleção de ferramenta pelo LLM quando a heurística não entende a pergunta
-- [ ] Resposta "fora do escopo" elegante quando nenhuma ferramenta serve
+- [x] Roteador: casos `Undecided` da heurística vão para o LLM (`router_schema`)
+- [x] Seleção de ferramenta pelo LLM quando a heurística não entende a pergunta (`Interpreter::Llm`,
+      "interpretado pelo modelo" no "como calculei")
+- [x] Resposta "fora do escopo" quando nenhuma ferramenta serve (`{"tool":"none"}`)
+- [ ] Testar no app (`pnpm tauri dev`) com perguntas que as regras não entendem (usa a GPU)
+- [ ] Aviso na interface enquanto o modelo carrega na primeira pergunta livre (~9 s)
 - [ ] Redação pelo LLM (opcional): manter os templates de `answer.rs` como padrão/fallback
 
 ## 4. Fase 6 — Desculpas (feature 19)

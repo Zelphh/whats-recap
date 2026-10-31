@@ -18,14 +18,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = core_storage::Db::open(db_path)?;
     if json {
         let answers: Vec<(String, core_chat::ChatAnswer)> = args
-            .map(|q| core_chat::ask(&db, &q).map(|a| (q, a)))
+            .map(|q| core_chat::ask(&db, &q, None).map(|a| (q, a)))
             .collect::<Result<_, _>>()?;
         println!("{}", serde_json::to_string_pretty(&answers)?);
         return Ok(());
     }
     for question in args {
         let t = Instant::now();
-        let a = core_chat::ask(&db, &question)?;
+        let a = core_chat::ask(&db, &question, None)?;
         println!("? {question}");
         if let Some(call) = &a.tool {
             println!("  [{:?}] {}", a.route, serde_json::to_string(call)?);

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { BucketBars, HourRadial, TimelineCard, WeekdayBars } from "../components/charts";
+import { BucketBars, CalendarCard, HourRadial, TimelineCard, WeekdayBars } from "../components/charts";
 import { CountUp, Dot, Legend, Seg, Who } from "../components/ui";
 import { Sticker } from "../components/Sticker";
 import {
@@ -375,6 +375,7 @@ export function Dashboard({ id, stats, summary, onOpenMessage }: Props) {
         </section>
 
         <TimelineCard stats={stats} />
+        <CalendarCard stats={stats} />
 
         <section className="card r-c s-quem reveal">
           <div className="label">Quem manda mais mensagens</div>

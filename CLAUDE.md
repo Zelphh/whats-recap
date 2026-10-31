@@ -64,7 +64,7 @@ Pipeline em crates do workspace (`crates/*` + `src-tauri`), cada um dependendo d
    números). `llm.rs` guarda os schemas/prompts para quando o LLM entrar nos casos não resolvidos.
 6. **core-llm** — acesso ao modelo local: sobe o `llama-server` (llama.cpp) como processo filho e
    chama `/v1/chat/completions` com saída restrita por JSON schema. Genérico (não conhece o chat).
-   Testes usam um servidor HTTP falso; o que carrega o modelo de verdade é `#[ignore]` e o example `ask`.
+   Testes usam um servidor HTTP falso; o que carrega o modelo de verdade é `#[ignore]` e o example `ferramenta`.
 7. **synth** — gerador de conversas sintéticas (com mídia real WebP/Ogg) e o anonimizador de fixtures.
 
 **src-tauri/src/lib.rs** — todos os `#[tauri::command]`. Trabalho pesado roda em `blocking(...)`;

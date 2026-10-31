@@ -41,7 +41,7 @@ function isoToBr(iso: string) {
 }
 
 /** "Como calculei": a ferramenta e os parâmetros, para o usuário conferir a interpretação. */
-function HowCalculated({ tool }: { tool: ToolCall }) {
+function HowCalculated({ tool, by }: { tool: ToolCall; by: ChatAnswer["interpretedBy"] }) {
   const { word, author, from, to, granularity } = tool.args;
   const parts = [
     word && `palavra “${word}”`,
@@ -54,6 +54,7 @@ function HowCalculated({ tool }: { tool: ToolCall }) {
     <div className="how">
       <span className="chip" style={{ fontSize: 12 }}>{TOOL_LABEL[tool.tool] ?? tool.tool}</span>
       {parts.length > 0 && <span>{parts.join(" · ")}</span>}
+      {by === "llm" && <span title="A pergunta foi interpretada pelo modelo de linguagem; a contagem é exata.">· interpretado pelo modelo</span>}
     </div>
   );
 }
@@ -139,7 +140,7 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage }: Props) {
                       })}
                     </div>
                   )}
-                  {t.answer.tool && <HowCalculated tool={t.answer.tool} />}
+                  {t.answer.tool && <HowCalculated tool={t.answer.tool} by={t.answer.interpretedBy} />}
                 </div>
               )}
             </div>

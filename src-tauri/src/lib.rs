@@ -6,9 +6,10 @@
 use core_stats::{STATS_VERSION, Stats, StatsSettings, compute_from_db};
 use core_storage::{Db, ImportOptions, ImportProgress, ImportSummary, MessageRow, import_new};
 use serde::Serialize;
+use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 type CmdResult<T> = Result<T, String>;
@@ -266,10 +267,77 @@ async fn locate_date(app: AppHandle, id: String, date: String) -> CmdResult<Opti
     open(&app, &id)?.first_id_at_or_after(ts).map_err(err)
 }
 
+/// Modelo de linguagem do chat. O `llama-server` só sobe na primeira pergunta que as regras fixas
+/// não entendem (~9 s e ~5,5 GB de VRAM com o Qwen3.5 9B) e fica de pé até o app fechar.
+#[derive(Default)]
+struct LlmState {
+    server: Mutex<Option<core_llm::Server>>,
+}
+
+/// O `llama-server` e o modelo: variáveis de ambiente ou, em desenvolvimento, os arquivos do
+/// `whatsrecap-evals` ao lado deste repositório. Sem eles, o chat usa só as regras fixas.
+/// (Baixar o modelo pelo app é a próxima etapa; ver `docs/TODO.md`.)
+fn llm_files() -> Option<(PathBuf, PathBuf)> {
+    let env = |var: &str| std::env::var_os(var).map(PathBuf::from);
+    let dev =
+        |rel: &str| cfg!(debug_assertions).then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel));
+    let server = if cfg!(windows) {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    };
+    let bin = env("WHATSRECAP_LLAMA_SERVER")
+        .or_else(|| dev(&format!("whatsrecap-evals/vendor/llama.cpp/current/{server}")))?;
+    let model = env("WHATSRECAP_MODEL").or_else(|| dev("whatsrecap-evals/models/Qwen3.5-9B-IQ4_XS.gguf"))?;
+    (bin.exists() && model.exists()).then_some((bin, model))
+}
+
+/// Ponte entre o chat e o `core-llm`.
+struct AppLlm<'a> {
+    state: &'a LlmState,
+    bin: PathBuf,
+    model: PathBuf,
+    log: Option<PathBuf>,
+}
+
+impl core_chat::Llm for AppLlm<'_> {
+    fn complete(&self, system: &str, user: &str, schema: &Value, max_tokens: u32) -> Result<Value, String> {
+        let client = {
+            let mut server = self.state.server.lock().map_err(err)?;
+            if server.is_none() {
+                let mut cfg = core_llm::ServerConfig::new(&self.bin, &self.model);
+                cfg.log = self.log.clone();
+                *server = Some(core_llm::Server::start(&cfg).map_err(err)?);
+            }
+            server.as_ref().map(|s| s.client().clone()).unwrap()
+        };
+        match client.chat::<Value>(system, user, schema, max_tokens) {
+            Ok(out) => Ok(out.value),
+            Err(e) => {
+                // Servidor fora do ar (caiu ou foi encerrado): sobe de novo na próxima pergunta.
+                if matches!(e, core_llm::LlmError::Http(_)) {
+                    self.state.server.lock().map_err(err)?.take();
+                }
+                Err(err(e))
+            }
+        }
+    }
+}
+
 /// Pergunta ao chat (tipo 1: contagens). A resposta traz o texto, a ferramenta usada e as citações.
 #[tauri::command]
 async fn chat_ask(app: AppHandle, id: String, question: String) -> CmdResult<core_chat::ChatAnswer> {
-    blocking(move || core_chat::ask(&open(&app, &id)?, &question).map_err(err)).await
+    blocking(move || {
+        let db = open(&app, &id)?;
+        let llm = llm_files().map(|(bin, model)| AppLlm {
+            state: app.state::<LlmState>().inner(),
+            bin,
+            model,
+            log: app.path().app_data_dir().ok().map(|d| d.join("llama-server.log")),
+        });
+        core_chat::ask(&db, &question, llm.as_ref().map(|l| l as &dyn core_chat::Llm)).map_err(err)
+    })
+    .await
 }
 
 /// Perguntas de exemplo com os nomes da conversa.
@@ -283,6 +351,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(ImportState::default())
+        .manage(LlmState::default())
         .invoke_handler(tauri::generate_handler![
             list_conversations,
             import_conversation,
@@ -300,6 +369,14 @@ pub fn run() {
             search_messages,
             locate_date,
         ])
-        .run(tauri::generate_context!())
-        .expect("erro ao iniciar o app");
+        .build(tauri::generate_context!())
+        .expect("erro ao iniciar o app")
+        .run(|app, event| {
+            // Encerra o llama-server junto com o app (o Drop do Server mata o processo).
+            if let tauri::RunEvent::Exit = event
+                && let Ok(mut server) = app.state::<LlmState>().server.lock()
+            {
+                server.take();
+            }
+        });
 }

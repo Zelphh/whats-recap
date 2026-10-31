@@ -4814,6 +4814,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "core-chat",
+ "core-llm",
  "core-media",
  "core-parser",
  "core-stats",

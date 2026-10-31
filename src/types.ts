@@ -175,6 +175,7 @@ export interface ChatAnswer {
   tool: ToolCall | null;
   /** Resultado bruto da ferramenta (JSON); a interface só mostra o texto e as citações. */
   result: unknown;
-  interpretedBy: "heuristic" | null;
+  /** Quem escolheu a ferramenta: as regras fixas ou o modelo de linguagem. */
+  interpretedBy: "heuristic" | "llm" | null;
   citations: MessageRow[];
 }

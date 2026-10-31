@@ -1,4 +1,6 @@
 use super::*;
+use serde_json::json;
+use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
 
 // Valores esperados, contados à mão:
@@ -43,7 +45,7 @@ fn with_db(f: impl FnOnce(&Db)) {
 }
 
 fn ask_ok(db: &Db, q: &str) -> ChatAnswer {
-    let a = ask(db, q).unwrap();
+    let a = ask(db, q, None).unwrap();
     println!("{q}\n  → {}", a.text);
     a
 }
@@ -246,4 +248,149 @@ fn examples_use_names() {
     let ex = examples(&["Ana Souza".into(), "Bruno".into()]);
     assert_eq!(ex[0], "Quantas vezes Bruno falou \"amor\"?");
     assert!(ex[4].contains("Ana disse"));
+}
+
+/// LLM de respostas fixas: uma para o roteador e outra para a escolha de ferramenta.
+struct FakeLlm {
+    route: Result<Value, String>,
+    tool: Result<Value, String>,
+    /// (prompt de sistema, pergunta, schema) de cada chamada.
+    calls: RefCell<Vec<(String, String, Value)>>,
+}
+
+impl FakeLlm {
+    fn new(route: &str, tool: Value) -> Self {
+        FakeLlm {
+            route: Ok(json!({ "type": route })),
+            tool: Ok(tool),
+            calls: RefCell::default(),
+        }
+    }
+}
+
+impl Llm for FakeLlm {
+    fn complete(&self, system: &str, user: &str, schema: &Value, _: u32) -> Result<Value, String> {
+        self.calls
+            .borrow_mut()
+            .push((system.to_string(), user.to_string(), schema.clone()));
+        if system == llm::router_prompt() {
+            self.route.clone()
+        } else {
+            self.tool.clone()
+        }
+    }
+}
+
+#[test]
+fn llm_answers_what_the_rules_do_not_understand() {
+    with_db(|db| {
+        // O modelo preenche o período inteiro da conversa: equivale a não filtrar.
+        let fake = FakeLlm::new(
+            "quantitative",
+            json!({ "tool": "messages_by_hour", "args": { "from": "2024-01-01", "to": "2025-02-10" } }),
+        );
+        let a = ask(db, "e aí, a gente conversa muito?", Some(&fake)).unwrap();
+        assert_eq!(a.route, Route::Quantitative);
+        assert_eq!(a.interpreted_by, Some(Interpreter::Llm));
+        assert_eq!(
+            a.tool,
+            Some(ToolCall::MessagesByHour {
+                author: None,
+                from: None,
+                to: None
+            })
+        );
+        assert!(a.text.starts_with("Foram 10 mensagens"), "{}", a.text);
+
+        let calls = fake.calls.borrow();
+        assert_eq!(calls.len(), 2, "roteador e ferramenta");
+        let (system, user, schema) = &calls[1];
+        assert_eq!(user, "e aí, a gente conversa muito?");
+        assert!(
+            system.contains("entre Ana Souza e Bruno (de 2024-01-01 a 2025-02-10)"),
+            "{system}"
+        );
+        assert_eq!(schema, &llm::tool_schema(&["Ana Souza".into(), "Bruno".into()]));
+    });
+}
+
+#[test]
+fn rules_come_before_the_llm() {
+    with_db(|db| {
+        let fake = FakeLlm::new("global", json!({}));
+        let a = ask(db, "Quantas vezes o Bruno falou 'amor'?", Some(&fake)).unwrap();
+        assert_eq!(a.interpreted_by, Some(Interpreter::Heuristic));
+        assert!(fake.calls.borrow().is_empty());
+    });
+}
+
+#[test]
+fn llm_without_a_fitting_tool() {
+    with_db(|db| {
+        let fake = FakeLlm::new("quantitative", json!({ "tool": "none", "args": {} }));
+        let a = ask(db, "quantas vezes a gente brigou?", Some(&fake)).unwrap();
+        assert!(a.tool.is_none());
+        assert!(a.text.contains("não dá para responder com as contagens"), "{}", a.text);
+        // O roteador por regras já decidiu (contagem): só a ferramenta passa pelo modelo.
+        assert_eq!(fake.calls.borrow().len(), 1);
+    });
+}
+
+#[test]
+fn llm_routes_undecided_questions() {
+    with_db(|db| {
+        let fake = FakeLlm::new("global", json!({}));
+        let a = ask(db, "oi, tudo bem?", Some(&fake)).unwrap();
+        assert_eq!(a.route, Route::Global);
+        assert!(a.tool.is_none());
+    });
+}
+
+#[test]
+fn llm_failure_falls_back_to_the_rules() {
+    with_db(|db| {
+        let fake = FakeLlm {
+            route: Err("o servidor caiu".into()),
+            tool: Err("o servidor caiu".into()),
+            calls: RefCell::default(),
+        };
+        let a = ask(db, "oi, tudo bem?", Some(&fake)).unwrap();
+        assert!(a.tool.is_none());
+        assert!(
+            a.text.contains("o servidor caiu") && a.text.contains("Experimente"),
+            "{}",
+            a.text
+        );
+    });
+}
+
+#[test]
+fn intent_follows_the_question() {
+    use intent::{Intent, intent_for};
+    let by_hour = ToolCall::MessagesByHour {
+        author: None,
+        from: None,
+        to: None,
+    };
+    assert_eq!(
+        intent_for(&by_hour, "que horas a gente mais conversa?"),
+        Intent::PeakHour
+    );
+    assert!(matches!(
+        intent_for(&by_hour, "quem manda menos mensagem de manhã?"),
+        Intent::WhoMost {
+            most: false,
+            hours: Some((6, 11, _))
+        }
+    ));
+    let period = ToolCall::MessagesByPeriod {
+        granularity: Granularity::Month,
+        author: None,
+        from: None,
+        to: None,
+    };
+    assert_eq!(
+        intent_for(&period, "mês com menos conversa"),
+        Intent::TopPeriod { most: false }
+    );
 }

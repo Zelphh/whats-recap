@@ -2,7 +2,7 @@
 //! quando a heurística não entender a pergunta. **Carrega o modelo na GPU.**
 //!
 //! ```text
-//! cargo run --release -p core-llm --example ask -- "quantas vezes ela me chamou de chato ano passado?"
+//! cargo run --release -p core-llm --example ferramenta -- "quantas vezes ela me chamou de chato ano passado?"
 //! ```
 //!
 //! Por padrão usa o `llama-server` e o Qwen3.5 9B do `whatsrecap-evals` (ao lado deste repositório);
@@ -21,7 +21,7 @@ const LAST: &str = "2026-02-27";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let questions: Vec<String> = std::env::args().skip(1).collect();
     if questions.is_empty() {
-        return Err("uso: ask <pergunta>...".into());
+        return Err("uso: ferramenta <pergunta>...".into());
     }
     let mut cfg = ServerConfig::new(
         path("WHATSRECAP_LLAMA_SERVER", LLAMA_SERVER),
@@ -38,13 +38,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let authors: Vec<String> = AUTHORS.iter().map(|a| a.to_string()).collect();
-    let system = llm::tool_selection_prompt(&authors, FIRST, LAST);
+    // "Hoje" é o fim da conversa fictícia, para "ano passado" dar sempre o mesmo intervalo.
+    let system = llm::tool_selection_prompt(&authors, FIRST, LAST, LAST);
     let schema = llm::tool_schema(&authors);
     let date = |s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
     for q in questions {
-        let out = server.client().chat::<ToolCall>(&system, &q, &schema, 120)?;
-        let call = out.value.without_redundant_range(date(FIRST), date(LAST));
-        println!("? {q}\n  {}", serde_json::to_string(&call)?);
+        let out = server.client().chat::<serde_json::Value>(&system, &q, &schema, 120)?;
+        let shown = if out.value["tool"] == llm::NO_TOOL {
+            "nenhuma ferramenta responde".to_string()
+        } else {
+            let call: ToolCall = serde_json::from_value(out.value)?;
+            serde_json::to_string(&call.without_redundant_range(date(FIRST), date(LAST)))?
+        };
+        println!("? {q}\n  {shown}");
         println!(
             "  {:.2?} · {} tokens de prompt, {} gerados\n",
             out.latency, out.timings.prompt_tokens, out.timings.generated_tokens
