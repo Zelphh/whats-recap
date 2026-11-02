@@ -96,12 +96,17 @@ compila o app e passa em `cargo test --workspace`.
         sistema): aquecer os dois slots logo após subir o servidor
 - [x] Aviso na interface enquanto o modelo carrega na primeira pergunta livre (~9 s)
 - [ ] Redação pelo LLM (opcional): manter os templates de `answer.rs` como padrão/fallback
-- [ ] Ferramenta `list_messages` (filtro exato, sem contagem nem RAG): autor, faixa de horas, datas
-      e palavra opcional. Responde o total com algumas citações e um link para a lista completa no
-      visualizador. Ex.: "quais foram as mensagens da Ana entre 7h e 8h da manhã?"
-  - [ ] Roteador: "quais foram as mensagens de X …" com horário/data/autor vai para o tipo 1, não
-        para conteúdo (hoje cai no quebra-galho de `retrieval_answer`)
-  - [ ] Schema e prompt da seleção de ferramenta no `llm.rs` + caso no dataset B do evals
+- [x] Ferramenta `list_messages` (filtro exato, sem contagem nem RAG): autor, datas, faixa de horas
+      (passa da meia-noite) e palavra opcional. Responde o total por pessoa com as 5 primeiras
+      citações; "Ver as N na conversa" abre a lista completa (até 1.000) no painel do visualizador
+  - [x] Regras fixas: "quais foram/mostra as mensagens…", "o que ela mandou" + horário, "quantas
+        mensagens" + faixa de horas; "das 7h às 8h", "entre 22h e 2h", "de 7 a 9 da noite", "às 7h",
+        "antes das 7h"; datas "15/03/2024" e "15 de março de 2024"
+  - [x] "Quem é você nesta conversa?" nas configurações (meta `chat_me`; padrão: o autor "Você"):
+        "eu" vira você e "ela"/"ele"/"dela"/"dele", a outra pessoa, nas regras fixas e no prompt
+        da seleção de ferramenta (sem a escolha, o prompt é o mesmo medido no evals)
+  - [x] Schema e prompt da seleção de ferramenta no `llm.rs`; exemplo no roteador; casos t51–t55 no B
+  - [ ] Rodar B no Qwen 9B com a ferramenta nova (os outros 50 itens podem mudar com o prompt maior)
 - [x] "eu"/"eu disse" na pergunta apontar para o autor "Você" (export do iOS/Android do próprio
       dono), sem confundir com o "eu" da palavra procurada ("eu te amo")
 

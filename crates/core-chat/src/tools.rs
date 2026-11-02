@@ -68,6 +68,53 @@ pub enum ToolCall {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<NaiveDate>,
     },
+    ListMessages(ListFilter),
+}
+
+/// Filtro exato de `list_messages` ("quais foram as mensagens dela das 7h às 8h?"). Também é o que
+/// o visualizador recebe para mostrar a lista completa.
+///
+/// Horas do dia: `hour_from` inclusiva e `hour_to` exclusiva ("das 7h às 8h" = 7 e 8). Com
+/// `hour_from > hour_to` a faixa passa da meia-noite ("das 22h às 2h"); iguais, é aquela hora
+/// inteira ("às 7h"). Só uma das pontas: até a meia-noite ou desde a meia-noite.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ListFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<NaiveDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<NaiveDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hour_from: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hour_to: Option<u8>,
+    /// Só mensagens com esta palavra ou expressão (mesma comparação de `count_word`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word: Option<String>,
+}
+
+impl ListFilter {
+    /// Horas incluídas (0–23), ou `None` sem filtro de hora.
+    pub fn hours(&self) -> Result<Option<[bool; 24]>, ToolError> {
+        let (a, b) = match (self.hour_from, self.hour_to) {
+            (None, None) => return Ok(None),
+            (a, b) => (a.unwrap_or(0), b.unwrap_or(24)),
+        };
+        if a > 23 || b > 24 {
+            return Err(ToolError::InvalidHour(a.max(b)));
+        }
+        let mut hours = [false; 24];
+        for (h, on) in hours.iter_mut().enumerate() {
+            let h = h as u8;
+            *on = match a.cmp(&b) {
+                std::cmp::Ordering::Less => (a..b).contains(&h),
+                std::cmp::Ordering::Equal => h == a,
+                std::cmp::Ordering::Greater => h >= a || h < b,
+            };
+        }
+        Ok(Some(hours))
+    }
 }
 
 impl ToolCall {
@@ -78,6 +125,7 @@ impl ToolCall {
             ToolCall::MessagesByPeriod { .. } => "messages_by_period",
             ToolCall::FirstOccurrence { .. } => "first_occurrence",
             ToolCall::ResponseTime { .. } => "response_time",
+            ToolCall::ListMessages(_) => "list_messages",
         }
     }
 
@@ -86,7 +134,8 @@ impl ToolCall {
             ToolCall::CountWord { from, to, .. }
             | ToolCall::MessagesByHour { from, to, .. }
             | ToolCall::MessagesByPeriod { from, to, .. }
-            | ToolCall::ResponseTime { from, to, .. } => (*from, *to),
+            | ToolCall::ResponseTime { from, to, .. }
+            | ToolCall::ListMessages(ListFilter { from, to, .. }) => (*from, *to),
             ToolCall::FirstOccurrence { .. } => (None, None),
         }
     }
@@ -97,7 +146,8 @@ impl ToolCall {
             | ToolCall::MessagesByHour { author, .. }
             | ToolCall::MessagesByPeriod { author, .. }
             | ToolCall::FirstOccurrence { author, .. }
-            | ToolCall::ResponseTime { author, .. } => author.as_deref(),
+            | ToolCall::ResponseTime { author, .. }
+            | ToolCall::ListMessages(ListFilter { author, .. }) => author.as_deref(),
         }
     }
 
@@ -109,7 +159,8 @@ impl ToolCall {
             ToolCall::CountWord { from, to, .. }
             | ToolCall::MessagesByHour { from, to, .. }
             | ToolCall::MessagesByPeriod { from, to, .. }
-            | ToolCall::ResponseTime { from, to, .. } => {
+            | ToolCall::ResponseTime { from, to, .. }
+            | ToolCall::ListMessages(ListFilter { from, to, .. }) => {
                 if from.is_some_and(|f| f <= first) {
                     *from = None;
                 }
@@ -166,6 +217,12 @@ pub enum ToolResult {
         by_author: Vec<ResponseStats>,
         fastest: Option<usize>,
     },
+    ListMessages {
+        total: u64,
+        by_author: Vec<u64>,
+        /// Primeiras mensagens (ids), para citação; a lista completa vai para o visualizador.
+        examples: Vec<i64>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -176,6 +233,8 @@ pub enum ToolError {
     EmptyWord,
     #[error("a data inicial ({from}) é depois da final ({to})")]
     InvertedRange { from: NaiveDate, to: NaiveDate },
+    #[error("hora inválida ({0}h)")]
+    InvalidHour(u8),
     #[error(transparent)]
     Storage(#[from] core_storage::StorageError),
     #[error("erro no banco de dados: {0}")]
@@ -187,6 +246,34 @@ pub struct Conversation<'a> {
     pub db: &'a Db,
     pub authors: Vec<String>,
     pub settings: StatsSettings,
+    /// Quem faz as perguntas (um dos `authors`), se conhecido: ver [`me`].
+    pub me: Option<String>,
+}
+
+/// Chave em `meta` com quem pergunta. Ausente: o autor "Você" do export, se houver; `null`: o
+/// usuário escolheu não dizer.
+const ME_KEY: &str = "chat_me";
+
+/// Quem faz as perguntas no chat: o escolhido nas configurações ou, sem escolha, o autor "Você".
+pub fn me(db: &Db) -> Result<Option<String>, ToolError> {
+    match db.meta_get::<Option<String>>(ME_KEY)? {
+        Some(chosen) => Ok(chosen),
+        None => Ok(crate::intent::default_me(&db.summary()?.authors).map(str::to_string)),
+    }
+}
+
+/// Grava quem faz as perguntas (`None`: ninguém). O nome precisa ser um dos autores.
+pub fn set_me(db: &Db, me: Option<&str>) -> Result<(), ToolError> {
+    let authors = db.summary()?.authors;
+    if let Some(m) = me
+        && !authors.iter().any(|a| a == m)
+    {
+        return Err(ToolError::UnknownAuthor {
+            name: m.to_string(),
+            options: authors,
+        });
+    }
+    Ok(db.meta_set(ME_KEY, &me)?)
 }
 
 fn fold(s: &str) -> String {
@@ -198,6 +285,7 @@ impl<'a> Conversation<'a> {
         Ok(Self {
             authors: db.summary()?.authors,
             settings: db.meta_get("settings")?.unwrap_or_default(),
+            me: me(db)?,
             db,
         })
     }
@@ -275,7 +363,70 @@ impl<'a> Conversation<'a> {
             ToolCall::ResponseTime { author, from, to } => {
                 self.response_time(self.author_idx(author.as_deref())?, *from, *to)
             }
+            ToolCall::ListMessages(filter) => {
+                let mut by_author = vec![0u64; self.authors.len()];
+                let (mut total, mut examples) = (0u64, Vec::new());
+                self.scan_list(filter, |id, a| {
+                    total += 1;
+                    by_author[a] += 1;
+                    if examples.len() < EXAMPLES {
+                        examples.push(id);
+                    }
+                    true
+                })?;
+                Ok(ToolResult::ListMessages {
+                    total,
+                    by_author,
+                    examples,
+                })
+            }
         }
+    }
+
+    /// As mensagens que passam no filtro, em ordem, até `limit` (para o visualizador).
+    pub fn list_messages(&self, filter: &ListFilter, limit: usize) -> Result<Vec<MessageRow>, ToolError> {
+        let mut ids = Vec::new();
+        self.scan_list(filter, |id, _| {
+            ids.push(id);
+            ids.len() < limit
+        })?;
+        Ok(self.db.messages_by_ids(&ids)?)
+    }
+
+    /// Percorre as mensagens do filtro em ordem, com o id e o índice do autor; `f` devolve `false`
+    /// para parar.
+    fn scan_list(&self, filter: &ListFilter, mut f: impl FnMut(i64, usize) -> bool) -> Result<(), ToolError> {
+        let author = self.author_idx(filter.author.as_deref())?;
+        let word = match filter.word.as_deref() {
+            Some(w) => Some(WordQuery::new(w).ok_or(ToolError::EmptyWord)?),
+            None => None,
+        };
+        let hours = filter.hours()?;
+        let (where_, params) = self.filter(author, filter.from, filter.to)?;
+        let mut st = self.db.conn().prepare(&format!(
+            "SELECT id, ts, author, text FROM messages WHERE {where_} ORDER BY id"
+        ))?;
+        let mut rows = st.query(rusqlite::params_from_iter(params))?;
+        while let Some(r) = rows.next()? {
+            let ts: i64 = r.get(1)?;
+            if hours.is_some_and(|h| !h[(ts.rem_euclid(86400) / 3600) as usize]) {
+                continue;
+            }
+            if let Some(q) = &word {
+                let text: Option<String> = r.get(3)?;
+                if text.is_none_or(|t| q.count_in(&tokens(&t)) == 0) {
+                    continue;
+                }
+            }
+            let a = r.get_ref(2)?.as_str().map_err(rusqlite::Error::from)?;
+            let Some(a) = self.authors.iter().position(|x| x == a) else {
+                continue;
+            };
+            if !f(r.get(0)?, a) {
+                break;
+            }
+        }
+        Ok(())
     }
 
     fn scan_text(

@@ -157,6 +157,84 @@ fn tools_directly() {
 }
 
 #[test]
+fn list_messages() {
+    with_db(|db| {
+        let c = Conversation::open(db).unwrap();
+        // Das 23h às 2h: 01:00, 01:02 e 01:03 de 01/01 e 23:00 de 02/01.
+        let night = ListFilter {
+            hour_from: Some(23),
+            hour_to: Some(2),
+            ..Default::default()
+        };
+        let r = c.execute(&ToolCall::ListMessages(night.clone())).unwrap();
+        assert_eq!(
+            r,
+            ToolResult::ListMessages {
+                total: 4,
+                by_author: vec![2, 2],
+                examples: vec![1, 2, 3, 6]
+            }
+        );
+        let ids =
+            |f: &ListFilter, limit| -> Vec<i64> { c.list_messages(f, limit).unwrap().iter().map(|m| m.id).collect() };
+        assert_eq!(ids(&night, 2), [1, 2]);
+        let te_amo = ListFilter {
+            author: Some("ana".into()),
+            word: Some("te amo".into()),
+            ..Default::default()
+        };
+        assert_eq!(ids(&te_amo, 100), [3, 9]);
+        // A mídia oculta entra na lista (não tem texto, mas é mensagem).
+        let day = ListFilter {
+            author: Some("Bruno".into()),
+            from: NaiveDate::from_ymd_opt(2024, 3, 15),
+            to: NaiveDate::from_ymd_opt(2024, 3, 15),
+            ..Default::default()
+        };
+        assert_eq!(ids(&day, 100), [8]);
+        assert!(matches!(
+            c.execute(&ToolCall::ListMessages(ListFilter {
+                hour_from: Some(25),
+                ..Default::default()
+            })),
+            Err(ToolError::InvalidHour(25))
+        ));
+
+        let a = ask_ok(db, "quais foram as mensagens da Ana de madrugada?");
+        assert_eq!(a.text, "Ana Souza mandou 2 mensagens da meia-noite às 6h.");
+        assert_eq!(a.citations.iter().map(|m| m.id).collect::<Vec<_>>(), [1, 3]);
+        let a = ask_ok(db, "quais foram as mensagens entre 23h e 2h?");
+        assert_eq!(a.text, "Foram 4 mensagens das 23h às 2h (Ana Souza: 2 · Bruno: 2).");
+        let a = ask_ok(db, "mostra as mensagens com 'amor' de 2025");
+        assert_eq!(a.text, "Não encontrei mensagens com “amor” em 2025.");
+    });
+}
+
+#[test]
+fn who_asks() {
+    with_db(|db| {
+        assert_eq!(me(db).unwrap(), None, "sem \"Você\" no export");
+        let a = ask_ok(db, "quantas vezes ela falou 'amor'?");
+        assert_eq!(a.tool.unwrap().author(), None);
+
+        set_me(db, Some("Bruno")).unwrap();
+        assert_eq!(me(db).unwrap().as_deref(), Some("Bruno"));
+        let a = ask_ok(db, "quantas vezes ela falou 'amor'?");
+        assert_eq!(a.tool.unwrap().author(), Some("Ana Souza"));
+        assert!(a.text.starts_with("Ana Souza escreveu “amor” 1 vez"), "{}", a.text);
+        let a = ask_ok(db, "quantas vezes eu falei 'amor'?");
+        assert_eq!(a.tool.unwrap().author(), Some("Bruno"));
+
+        assert!(matches!(
+            set_me(db, Some("Carla")),
+            Err(ToolError::UnknownAuthor { .. })
+        ));
+        set_me(db, None).unwrap();
+        assert_eq!(me(db).unwrap(), None);
+    });
+}
+
+#[test]
 fn questions_end_to_end() {
     with_db(|db| {
         let a = ask_ok(db, "Quantas vezes o Bruno falou 'amor'?");

@@ -27,7 +27,7 @@ static GLOBAL_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 static QUANT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"\b(quant[ao]s?|quem (mais|menos|manda|envia|escreve|fala|responde|demora|digita|conversa|puxa)|primeira vez|qual (o |a )?(mes|ano|dia|semana|horario|hora)|que horas?|horario|com que frequencia|media|tempo de resposta|mais rapido|mais devagar|demora\w*)\b",
+        r"\b(quant[ao]s?|quem (mais|menos|manda|envia|escreve|fala|responde|demora|digita|conversa|puxa)|primeira vez|qual (o |a )?(mes|ano|dia|semana|horario|hora)|que horas?|horario|com que frequencia|media|tempo de resposta|mais rapido|mais devagar|demora\w*|(quais|que|mostr\w*|list\w*|exib\w*) (foram |sao |eram )?(todas )?(as )?(mensagens|msgs?))\b",
     )
     .unwrap()
 });
@@ -48,7 +48,8 @@ pub fn route(question: &str) -> Route {
     let q = fold(question);
     if GLOBAL_RE.is_match(&q) {
         Route::Global
-    } else if QUANT_RE.is_match(&q) {
+    } else if QUANT_RE.is_match(&q) || crate::intent::is_timed_what(&q) {
+        // "o que ela mandou das 7h às 8h?" é um filtro (lista de mensagens), não pergunta de conteúdo.
         Route::Quantitative
     } else if RETRIEVAL_RE.is_match(&q) {
         Route::Retrieval
@@ -70,6 +71,10 @@ mod tests {
             "quando foi a primeira vez que ele disse te amo?",
             "Quem responde mais rápido?",
             "que horas a gente mais conversa?",
+            "quais foram as mensagens dela das 7h às 8h?",
+            "me mostra as mensagens do Bruno de madrugada",
+            "o que a gente mandou entre 22h e 2h?",
+            "me mostra o que ela escreveu de madrugada",
         ] {
             assert_eq!(route(q), Route::Quantitative, "{q}");
         }

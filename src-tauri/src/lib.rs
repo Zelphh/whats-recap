@@ -259,6 +259,35 @@ async fn search_messages(app: AppHandle, id: String, query: String, limit: i64) 
     blocking(move || open(&app, &id)?.search(&query, limit.clamp(1, 1000)).map_err(err)).await
 }
 
+/// Quem faz as perguntas no chat (para "eu", "ela" e "ele"): o escolhido nas configurações ou o
+/// autor "Você" do export.
+#[tauri::command]
+async fn get_chat_me(app: AppHandle, id: String) -> CmdResult<Option<String>> {
+    blocking(move || core_chat::me(&open(&app, &id)?).map_err(err)).await
+}
+
+#[tauri::command]
+async fn set_chat_me(app: AppHandle, id: String, me: Option<String>) -> CmdResult<()> {
+    blocking(move || core_chat::set_me(&open(&app, &id)?, me.as_deref()).map_err(err)).await
+}
+
+/// Lista completa de uma resposta `list_messages` do chat, para o painel do visualizador.
+#[tauri::command]
+async fn list_messages(
+    app: AppHandle,
+    id: String,
+    filter: core_chat::ListFilter,
+    limit: usize,
+) -> CmdResult<Vec<MessageRow>> {
+    blocking(move || {
+        let db = open(&app, &id)?;
+        core_chat::Conversation::open(&db)
+            .and_then(|c| c.list_messages(&filter, limit.clamp(1, 1000)))
+            .map_err(err)
+    })
+    .await
+}
+
 /// Id da primeira mensagem na data (`AAAA-MM-DD`) ou depois dela.
 #[tauri::command]
 async fn locate_date(app: AppHandle, id: String, date: String) -> CmdResult<Option<i64>> {
@@ -373,6 +402,8 @@ pub fn run() {
             get_sticker_thumb,
             chat_ask,
             chat_examples,
+            get_chat_me,
+            set_chat_me,
             llm_status,
             delete_conversation,
             get_stats,
@@ -382,6 +413,7 @@ pub fn run() {
             get_summary,
             get_messages,
             search_messages,
+            list_messages,
             locate_date,
         ])
         .build(tauri::generate_context!())

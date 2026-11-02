@@ -15,7 +15,7 @@ mod text;
 pub mod tools;
 
 pub use router::Route;
-pub use tools::{Conversation, Granularity, ToolCall, ToolError, ToolResult};
+pub use tools::{Conversation, Granularity, ListFilter, ToolCall, ToolError, ToolResult, me, set_me};
 
 use chrono::NaiveDate;
 use core_storage::{Db, MessageRow};
@@ -150,7 +150,7 @@ fn no_tool(authors: &[String]) -> ChatAnswer {
         Route::Quantitative,
         format!(
             "Essa pergunta não dá para responder com as contagens disponíveis: palavras, horários, períodos, \
-tempo de resposta e primeira vez que algo foi dito. Experimente, por exemplo: “{}”",
+tempo de resposta, primeira vez que algo foi dito e listas de mensagens por pessoa, data e horário. Experimente, por exemplo: “{}”",
             examples(authors)[0]
         ),
     )
@@ -201,7 +201,12 @@ fn calculate(
     let result = match conv.execute(&call) {
         Ok(r) => r,
         // Erros de parâmetro (autor desconhecido, datas invertidas) viram resposta, não falha.
-        Err(e @ (ToolError::UnknownAuthor { .. } | ToolError::EmptyWord | ToolError::InvertedRange { .. })) => {
+        Err(
+            e @ (ToolError::UnknownAuthor { .. }
+            | ToolError::EmptyWord
+            | ToolError::InvertedRange { .. }
+            | ToolError::InvalidHour(_)),
+        ) => {
             return Ok(ChatAnswer {
                 tool: Some(call),
                 interpreted_by: Some(by),
@@ -237,13 +242,14 @@ fn llm_route(llm: &dyn Llm, question: &str) -> Result<Route, String> {
 }
 
 /// Escolhe a ferramenta pelo LLM. `None`: nenhuma ferramenta responde a pergunta.
-fn llm_tool(llm: &dyn Llm, db: &Db, authors: &[String], question: &str) -> Result<Option<ToolCall>, String> {
+fn llm_tool(llm: &dyn Llm, db: &Db, conv: &Conversation, question: &str) -> Result<Option<ToolCall>, String> {
+    let authors = &conv.authors;
     let summary = db.summary().map_err(|e| e.to_string())?;
     let date = |ts: i64| chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default().date_naive();
     let (first, last) = (date(summary.first_ts), date(summary.last_ts));
     let today = chrono::Local::now().date_naive();
     let iso = |d: NaiveDate| d.format("%Y-%m-%d").to_string();
-    let system = llm::tool_selection_prompt(authors, &iso(first), &iso(last), &iso(today));
+    let system = llm::tool_selection_prompt(authors, conv.me.as_deref(), &iso(first), &iso(last), &iso(today));
     let out = llm.complete(&system, question, &llm::tool_schema(authors), TOOL_MAX_TOKENS)?;
     if out["tool"] == llm::NO_TOOL {
         return Ok(None);
@@ -259,7 +265,7 @@ pub fn ask(db: &Db, question: &str, llm: Option<&dyn Llm>) -> Result<ChatAnswer,
     let conv = Conversation::open(db)?;
     let route = router::route(question);
     if matches!(route, Route::Quantitative | Route::Undecided)
-        && let Some((call, intent)) = intent::interpret(question, &conv.authors)
+        && let Some((call, intent)) = intent::interpret_as(question, &conv.authors, conv.me.as_deref())
     {
         return calculate(db, &conv, call, &intent, Interpreter::Heuristic);
     }
@@ -274,7 +280,7 @@ pub fn ask(db: &Db, question: &str, llm: Option<&dyn Llm>) -> Result<ChatAnswer,
         (Route::Global, _) => Ok(global_answer(route)),
         (Route::Retrieval, _) => retrieval_answer(db, &conv, question),
         (_, None) => Ok(not_understood(route, &conv.authors, None)),
-        (_, Some(llm)) => match llm_tool(llm, db, &conv.authors, question) {
+        (_, Some(llm)) => match llm_tool(llm, db, &conv, question) {
             Ok(Some(call)) => {
                 let intent = intent::intent_for(&call, question);
                 calculate(db, &conv, call, &intent, Interpreter::Llm)

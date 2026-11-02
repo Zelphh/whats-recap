@@ -204,6 +204,20 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Mensagens com os ids dados, em ordem de id (ids inexistentes são ignorados).
+    pub fn messages_by_ids(&self, ids: &[i64]) -> Result<Vec<MessageRow>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Inteiros formatados direto no SQL: sem limite de parâmetros e sem risco de injeção.
+        let list = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {MESSAGE_COLS} FROM messages WHERE id IN ({list}) ORDER BY id"
+        ))?;
+        let rows = st.query_map([], MessageRow::from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Itera todas as mensagens em ordem, sem carregá-las de uma vez.
     pub fn for_each_message(&self, mut f: impl FnMut(MessageRow)) -> Result<()> {
         let mut st = self

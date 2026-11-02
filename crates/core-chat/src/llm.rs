@@ -22,13 +22,15 @@ pub fn router_schema() -> Value {
 pub fn router_prompt() -> String {
     "Você classifica perguntas sobre uma conversa de WhatsApp entre duas pessoas. Responda só com o tipo:\n\
 - quantitative: contagem, frequência, comparação ou estatística que dá para calcular (quantas vezes, quem manda \
-mais, que horas, qual mês, tempo de resposta, primeira vez que alguém disse algo).\n\
+mais, que horas, qual mês, tempo de resposta, primeira vez que alguém disse algo) ou lista as mensagens de \
+alguém num horário ou numa data.\n\
 - retrieval: pergunta pontual sobre o conteúdo de algum momento da conversa (o que alguém disse, quando combinaram \
 algo, onde foram).\n\
 - global: pede uma análise ou resumo da conversa inteira ou da relação (como evoluiu, resumo, melhor fase).\n\n\
 Exemplos:\n\
 \"quantas vezes ela me chamou de chato?\" → quantitative\n\
 \"quem puxa mais assunto de manhã?\" → quantitative\n\
+\"quais foram as mensagens dela de madrugada?\" → quantitative\n\
 \"o que a gente decidiu sobre o aluguel?\" → retrieval\n\
 \"qual era o nome do restaurante que ele indicou?\" → retrieval\n\
 \"a gente brigava mais no começo?\" → global\n\
@@ -77,6 +79,16 @@ pub fn tool_schema(authors: &[String]) -> Value {
             ),
             tool("first_occurrence", json!({ "word": word, "author": author }), &["word"]),
             tool("response_time", json!({ "author": author, "from": date, "to": date }), &[]),
+            tool(
+                "list_messages",
+                json!({
+                    "author": author, "from": date, "to": date,
+                    "hour_from": { "type": "integer", "minimum": 0, "maximum": 23 },
+                    "hour_to": { "type": "integer", "minimum": 0, "maximum": 24 },
+                    "word": word
+                }),
+                &[],
+            ),
             tool(NO_TOOL, json!({}), &[]),
         ]
     })
@@ -85,7 +97,16 @@ pub fn tool_schema(authors: &[String]) -> Value {
 /// Prompt de sistema para escolher a ferramenta. Datas em `AAAA-MM-DD`; `today` resolve datas
 /// relativas ("ano passado"), que já vão calculadas no prompt: o modelo errava a conta (trocava
 /// "ano passado" pelos últimos 12 meses).
-pub fn tool_selection_prompt(authors: &[String], first_date: &str, last_date: &str, today: &str) -> String {
+///
+/// `me` é quem pergunta (das configurações da conversa). Sem ele, o prompt é o medido no evals:
+/// "eu" nunca vira autor e pronomes ficam com o modelo.
+pub fn tool_selection_prompt(
+    authors: &[String],
+    me: Option<&str>,
+    first_date: &str,
+    last_date: &str,
+    today: &str,
+) -> String {
     format!(
         "Você escolhe UMA ferramenta para responder a uma pergunta sobre uma conversa de WhatsApp entre {} (de {first_date} a {last_date}). Você não lê a conversa: só escolhe a ferramenta e preenche os parâmetros.
 
@@ -95,8 +116,9 @@ Ferramentas:
 - messages_by_period(granularity, author?, from?, to?): mensagens por período. granularity: \"weekday\" para dia da semana, segunda a domingo, \"semana ou fim de semana\"; \"day\" para um dia do calendário; \"week\" para semanas do calendário (\"qual semana\", \"por semana\"); \"month\" para meses, épocas e estações do ano; \"year\" para anos.
 - first_occurrence(word, author?): a primeira mensagem com a palavra ou expressão.
 - response_time(author?, from?, to?): tempo de resposta (média e mediana) por pessoa.
+- list_messages(author?, from?, to?, hour_from?, hour_to?, word?): lista as mensagens de um filtro exato (\"quais foram as mensagens\", \"mostra as mensagens\", \"o que ela mandou das 7h às 8h\"). hour_from e hour_to são horas cheias, hour_to exclusiva: \"das 7h às 8h\" = 7 e 8; \"das 22h às 2h\" = 22 e 2; \"às 7h\" = 7 e 7; madrugada = 0 e 6, manhã = 6 e 12, tarde = 12 e 18, noite = 18 e 24. \"word\" só quando a pergunta pede mensagens com uma palavra.
 
-Pessoas: apelidos e pronomes (\"ela\", \"ele\", \"a Aninha\") se referem a uma das duas pelo nome. Quem pergunta é uma das duas, mas você não sabe qual: \"eu\", \"me\" e \"mim\" nunca viram \"author\". Preencha \"author\" só quando a pergunta for sobre UMA pessoa. Em comparações (\"quem...?\", \"X ou Y?\", \"eu ou ela?\", \"quem fala mais...\"), omita \"author\": as ferramentas já devolvem os números das duas.
+Pessoas: {}. Preencha \"author\" só quando a pergunta for sobre UMA pessoa. Em comparações (\"quem...?\", \"X ou Y?\", \"eu ou ela?\", \"quem fala mais...\"), omita \"author\": as ferramentas já devolvem os números das duas.
 
 Datas: AAAA-MM-DD, inclusivas; omita \"from\" e \"to\" quando a pergunta não fala de período. Hoje é {today}. {}Outros períodos (meses, estações) também viram \"from\" e \"to\"; o verão vai de 21 de dezembro a 20 de março.
 
@@ -104,12 +126,34 @@ Em count_word e first_occurrence, \"word\" é só a palavra ou expressão procur
 
 Exemplos (sem as datas):
 \"quem fala mais 'bom dia', eu ou ele?\" → {{\"tool\":\"count_word\",\"args\":{{\"word\":\"bom dia\"}}}}
-\"quantas vezes eu falei 'oi'?\" → {{\"tool\":\"count_word\",\"args\":{{\"word\":\"oi\"}}}}
+\"quantas vezes eu falei 'oi'?\" → {}
 \"quem demora mais pra responder?\" → {{\"tool\":\"response_time\",\"args\":{{}}}}
-\"falamos mais no sábado ou na segunda?\" → {{\"tool\":\"messages_by_period\",\"args\":{{\"granularity\":\"weekday\"}}}}",
+\"falamos mais no sábado ou na segunda?\" → {{\"tool\":\"messages_by_period\",\"args\":{{\"granularity\":\"weekday\"}}}}
+\"quais foram as mensagens entre 22h e 2h?\" → {{\"tool\":\"list_messages\",\"args\":{{\"hour_from\":22,\"hour_to\":2}}}}",
         authors.join(" e "),
-        relative_dates(today)
+        people(authors, me),
+        relative_dates(today),
+        first_person_example(me)
     )
+}
+
+/// Como resolver "eu", "ela" e apelidos, sabendo ou não quem pergunta.
+fn people(authors: &[String], me: Option<&str>) -> String {
+    let other = me.and_then(|m| authors.iter().find(|a| a.as_str() != m));
+    match (me, other) {
+        (Some(me), Some(other)) => format!(
+            "apelidos (\"a Aninha\") se referem a uma das duas pelo nome. Quem pergunta é {me}: \"eu\" e os verbos na primeira pessoa (\"falei\", \"mandei\") são {me}; \"ela\", \"ele\", \"dela\" e \"dele\" são {other}"
+        ),
+        _ => "apelidos e pronomes (\"ela\", \"ele\", \"a Aninha\") se referem a uma das duas pelo nome. Quem pergunta é uma das duas, mas você não sabe qual: \"eu\", \"me\" e \"mim\" nunca viram \"author\"".to_string(),
+    }
+}
+
+fn first_person_example(me: Option<&str>) -> String {
+    let args = match me {
+        Some(me) => json!({ "word": "oi", "author": me }),
+        None => json!({ "word": "oi" }),
+    };
+    json!({ "tool": "count_word", "args": args }).to_string()
 }
 
 /// "ano passado = 2025-01-01 a 2025-12-31; …" a partir de `today` (vazio se a data for inválida).
@@ -169,6 +213,7 @@ mod tests {
                 "messages_by_period",
                 "first_occurrence",
                 "response_time",
+                "list_messages",
                 "none"
             ]
         );
@@ -184,6 +229,9 @@ mod tests {
         assert_eq!(call.author(), Some("Bruno"));
         let out = r#"{"tool":"messages_by_period","args":{"granularity":"weekday"}}"#;
         assert!(serde_json::from_str::<ToolCall>(out).is_ok());
+        let out = r#"{"tool":"list_messages","args":{"author":"Ana","hour_from":7,"hour_to":8}}"#;
+        let call: ToolCall = serde_json::from_str(out).unwrap();
+        assert_eq!((call.name(), call.author()), ("list_messages", Some("Ana")));
         assert!(serde_json::from_str::<ToolCall>(r#"{"tool":"drop_table","args":{}}"#).is_err());
     }
 
@@ -192,13 +240,14 @@ mod tests {
         // O texto enviado ao llama-server, não o Value: é a ordem serializada que vira gramática.
         let s = serde_json::to_string(&tool_schema(&["Ana".into(), "Bruno".into()])).unwrap();
         let branches = s.matches(r#""properties":{"tool":"#).count();
-        assert_eq!(branches, 6, "\"tool\" tem de vir antes de \"args\" em cada ramo: {s}");
+        assert_eq!(branches, 7, "\"tool\" tem de vir antes de \"args\" em cada ramo: {s}");
     }
 
     #[test]
     fn relative_dates_are_computed() {
         let p = tool_selection_prompt(
             &["Ana".into(), "Bruno".into()],
+            None,
             "2021-03-14",
             "2026-03-31",
             "2026-03-31",
@@ -206,7 +255,26 @@ mod tests {
         assert!(p.contains("\"ano passado\" = 2025-01-01 a 2025-12-31"), "{p}");
         assert!(p.contains("\"mês passado\" = 2026-02-01 a 2026-02-28"), "{p}");
         assert!(p.contains("\"últimos 12 meses\" = 2025-03-31 a 2026-03-31"), "{p}");
-        assert!(!tool_selection_prompt(&[], "", "", "ontem").contains("ano passado\" ="));
+        assert!(!tool_selection_prompt(&[], None, "", "", "ontem").contains("ano passado\" ="));
+    }
+
+    #[test]
+    fn prompt_knows_who_asks() {
+        let authors = ["Matheus".to_string(), "Ana".to_string()];
+        // Sem quem pergunta: o texto medido no evals.
+        let p = tool_selection_prompt(&authors, None, "2024-01-01", "2024-12-31", "2024-12-31");
+        assert!(p.contains("Quem pergunta é uma das duas, mas você não sabe qual: \"eu\", \"me\" e \"mim\" nunca viram \"author\". Preencha"), "{p}");
+        assert!(
+            p.contains(r#""quantas vezes eu falei 'oi'?" → {"tool":"count_word","args":{"word":"oi"}}"#),
+            "{p}"
+        );
+        let p = tool_selection_prompt(&authors, Some("Matheus"), "2024-01-01", "2024-12-31", "2024-12-31");
+        assert!(p.contains("Quem pergunta é Matheus"), "{p}");
+        assert!(p.contains("\"dele\" são Ana. Preencha"), "{p}");
+        assert!(
+            p.contains(r#"{"tool":"count_word","args":{"word":"oi","author":"Matheus"}}"#),
+            "{p}"
+        );
     }
 
     #[test]

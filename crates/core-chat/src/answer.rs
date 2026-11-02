@@ -90,6 +90,7 @@ fn range_phrase(from: Option<NaiveDate>, to: Option<NaiveDate>) -> String {
         {
             format!(" em {} de {}", MONTHS[f.month0() as usize], f.year())
         }
+        (Some(f), Some(t)) if f == t => format!(" em {}", fmt_date(f)),
         (Some(f), Some(t)) => format!(" entre {} e {}", fmt_date(f), fmt_date(t)),
         (Some(f), None) => format!(" desde {}", fmt_date(f)),
         (None, Some(t)) => format!(" até {}", fmt_date(t)),
@@ -148,6 +149,28 @@ fn hours_phrase(h: Option<HourRange>) -> String {
         Some((a, b, "manhã")) => format!("De manhã ({a}h–{b}h), "),
         Some((a, b, name)) => format!("De {name} ({a}h–{b}h), "),
         None => String::new(),
+    }
+}
+
+/// " das 7h às 8h", " a partir das 22h", " antes das 7h" (mesma convenção de `ListFilter`).
+fn hour_filter_phrase(from: Option<u8>, to: Option<u8>) -> String {
+    // "das 7h", mas "da 1h" e "da meia-noite"; "às 8h", mas "à 1h".
+    let of = |h: u8| match h % 24 {
+        0 => "da meia-noite".to_string(),
+        1 => "da 1h".to_string(),
+        h => format!("das {h}h"),
+    };
+    let at = |h: u8| match h % 24 {
+        0 => "à meia-noite".to_string(),
+        1 => "à 1h".to_string(),
+        h => format!("às {h}h"),
+    };
+    match (from, to) {
+        (None, None) => String::new(),
+        (Some(a), None) => format!(" a partir {}", of(a)),
+        (None, Some(b)) => format!(" antes {}", of(b)),
+        (Some(a), Some(b)) if a == b => format!(" {} {}", of(a), at(a + 1)),
+        (Some(a), Some(b)) => format!(" {} {}", of(a), at(b)),
     }
 }
 
@@ -352,6 +375,51 @@ pub fn compose(call: &ToolCall, result: &ToolResult, intent: &Intent, authors: &
             };
             (text, vec![])
         }
+        (
+            ToolResult::ListMessages {
+                total,
+                by_author,
+                examples,
+            },
+            _,
+        ) => {
+            let ToolCall::ListMessages(f) = call else {
+                return (String::new(), vec![]);
+            };
+            let filters = format!(
+                "{}{}{range}",
+                f.word.as_deref().map(|w| format!(" com “{w}”")).unwrap_or_default(),
+                hour_filter_phrase(f.hour_from, f.hour_to)
+            );
+            let more = if *total as usize > examples.len() {
+                format!(
+                    " Abaixo, as {} primeiras; a lista completa abre na conversa.",
+                    examples.len()
+                )
+            } else {
+                String::new()
+            };
+            let text = if *total == 0 {
+                format!(
+                    "Não encontrei mensagens{}{filters}.",
+                    who.map(|a| format!(" de {a}")).unwrap_or_default()
+                )
+            } else if let Some(a) = who {
+                format!("{a} mandou {}{filters}.{more}", plural(*total, "mensagem", "mensagens"))
+            } else {
+                let parts: Vec<String> = authors
+                    .iter()
+                    .zip(by_author)
+                    .map(|(a, n)| format!("{a}: {}", fmt_int(*n)))
+                    .collect();
+                format!(
+                    "Foram {}{filters} ({}).{more}",
+                    plural(*total, "mensagem", "mensagens"),
+                    parts.join(" · ")
+                )
+            };
+            (text, examples.clone())
+        }
         (ToolResult::ResponseTime { by_author, fastest }, _) => {
             let text = match fastest {
                 Some(f) if authors.len() == 2 => {
@@ -391,6 +459,7 @@ mod tests {
             range_phrase(d(2024, 2, 3), d(2024, 2, 10)),
             " entre 03/02/2024 e 10/02/2024"
         );
+        assert_eq!(range_phrase(d(2024, 2, 3), d(2024, 2, 3)), " em 03/02/2024");
         assert_eq!(period_label(Granularity::Month, "2024-03"), "março de 2024");
         assert_eq!(period_label(Granularity::Weekday, "6"), "domingo");
     }

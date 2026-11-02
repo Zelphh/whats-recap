@@ -158,13 +158,20 @@ export interface ImportProgressEvent {
 
 export type ChatRoute = "quantitative" | "retrieval" | "global" | "undecided";
 
+/** Filtro de `list_messages` (chaves em snake_case, como o LLM preenche). Horas: `hour_from`
+ * inclusiva, `hour_to` exclusiva; `hour_from > hour_to` passa da meia-noite, iguais = aquela hora. */
+export interface ListFilter {
+  author?: string;
+  from?: string;
+  to?: string;
+  hour_from?: number;
+  hour_to?: number;
+  word?: string;
+}
+
 export interface ToolCall {
-  tool: "count_word" | "messages_by_hour" | "messages_by_period" | "first_occurrence" | "response_time";
-  args: {
-    word?: string;
-    author?: string;
-    from?: string;
-    to?: string;
+  tool: "count_word" | "messages_by_hour" | "messages_by_period" | "first_occurrence" | "response_time" | "list_messages";
+  args: ListFilter & {
     granularity?: "day" | "week" | "month" | "year" | "weekday";
   };
 }

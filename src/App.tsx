@@ -6,7 +6,7 @@ import { useTheme } from "./theme";
 import { fmtInt } from "./format";
 import { Home } from "./views/Home";
 import { Dashboard } from "./views/Dashboard";
-import { Viewer } from "./views/Viewer";
+import { Viewer, type Listing } from "./views/Viewer";
 import { Settings } from "./views/Settings";
 import { Chat, type ChatTurn } from "./views/Chat";
 
@@ -25,6 +25,8 @@ export function App() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [jumpTo, setJumpTo] = useState<number | null>(null);
+  // Lista completa de uma resposta do chat, aberta no painel de resultados do visualizador.
+  const [listing, setListing] = useState<Listing | null>(null);
   // Histórico do chat por conversa, mantido enquanto o app está aberto.
   const [chats, setChats] = useState<Record<string, ChatTurn[]>>({});
   const [folderOpen, setFolderOpen] = useState(true);
@@ -50,11 +52,17 @@ export function App() {
     setCurrent(id);
     setSubOpen(true);
     setJumpTo(null);
+    setListing(null);
     setView("dashboard");
   }
 
   function openMessage(id: number) {
     setJumpTo(id);
+    setView("viewer");
+  }
+
+  function openListing(l: Listing) {
+    setListing(l);
     setView("viewer");
   }
 
@@ -141,7 +149,8 @@ export function App() {
             ? <Dashboard key={info.id} id={info.id} stats={stats} summary={info.summary} onOpenMessage={openMessage} />
             : <div className="loading">Carregando…</div>)}
         {view === "viewer" && info && (
-          <Viewer id={info.id} summary={info.summary} jumpTo={jumpTo} onJumpHandled={() => setJumpTo(null)} />
+          <Viewer id={info.id} summary={info.summary} jumpTo={jumpTo} onJumpHandled={() => setJumpTo(null)}
+            listing={listing} onListingHandled={() => setListing(null)} />
         )}
         {view === "chat" && info && (
           <Chat
@@ -150,9 +159,10 @@ export function App() {
             turns={chats[info.id] ?? []}
             setTurns={(update) => setChats((c) => ({ ...c, [info.id]: update(c[info.id] ?? []) }))}
             onOpenMessage={openMessage}
+            onOpenListing={openListing}
           />
         )}
-        {view === "settings" && info && <Settings id={info.id} names={names} hasMedia={info.summary.hasMedia} onStats={setStats} />}
+        {view === "settings" && info && <Settings id={info.id} names={names} authors={info.summary.authors} hasMedia={info.summary.hasMedia} onStats={setStats} />}
       </main>
     </div>
   );

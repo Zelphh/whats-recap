@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Dot, Icon } from "../components/ui";
-import { fmtDate, fmtTime } from "../format";
-import type { ChatAnswer, ImportSummary, LlmStatus, ToolCall } from "../types";
+import { fmtDate, fmtInt, fmtTime } from "../format";
+import type { ChatAnswer, ImportSummary, ListFilter, LlmStatus, ToolCall } from "../types";
+import type { Listing } from "./Viewer";
 
 export interface ChatTurn {
   question: string;
@@ -16,6 +17,7 @@ interface Props {
   turns: ChatTurn[];
   setTurns: (update: (turns: ChatTurn[]) => ChatTurn[]) => void;
   onOpenMessage: (id: number) => void;
+  onOpenListing: (listing: Listing) => void;
 }
 
 const TOOL_LABEL: Record<ToolCall["tool"], string> = {
@@ -24,6 +26,7 @@ const TOOL_LABEL: Record<ToolCall["tool"], string> = {
   messages_by_period: "Mensagens por período",
   first_occurrence: "Primeira ocorrência",
   response_time: "Tempo de resposta",
+  list_messages: "Lista de mensagens",
 };
 
 const GRANULARITY: Record<string, string> = {
@@ -54,18 +57,43 @@ function Pending({ llm }: { llm: LlmStatus }) {
   return <div className="a-bubble pending" role="status">{slow ? PENDING[llm] : "Calculando…"}</div>;
 }
 
+/** Total de uma resposta `list_messages` (o resultado bruto vem do Rust). */
+function listTotal(a: ChatAnswer) {
+  return (a.result as { total?: number } | null)?.total ?? 0;
+}
+
 function isoToBr(iso: string) {
   const [y, m, d] = iso.split("-");
   return `${d}/${m}/${y}`;
 }
 
+/** "das 7h às 8h" (`hour_to` exclusiva; iguais = aquela hora), "a partir das 22h", "antes das 7h". */
+function hoursLabel(from?: number, to?: number) {
+  if (from === undefined && to === undefined) return "";
+  if (to === undefined) return `a partir das ${from}h`;
+  if (from === undefined) return `antes das ${to}h`;
+  return `das ${from}h às ${(from === to ? from + 1 : to) % 24}h`;
+}
+
+/** Título do painel com a lista completa: "Ana · das 7h às 8h · “amor”". */
+function listingLabel(f: ListFilter) {
+  const parts = [
+    f.author,
+    hoursLabel(f.hour_from, f.hour_to),
+    f.word && `“${f.word}”`,
+    f.from && f.from === f.to ? isoToBr(f.from) : [f.from && `desde ${isoToBr(f.from)}`, f.to && `até ${isoToBr(f.to)}`].filter(Boolean).join(" "),
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "Mensagens";
+}
+
 /** "Como calculei": a ferramenta e os parâmetros, para o usuário conferir a interpretação. */
 function HowCalculated({ tool, by }: { tool: ToolCall; by: ChatAnswer["interpretedBy"] }) {
-  const { word, author, from, to, granularity } = tool.args;
+  const { word, author, from, to, granularity, hour_from, hour_to } = tool.args;
   const parts = [
     word && `palavra “${word}”`,
     granularity && `por ${GRANULARITY[granularity] ?? granularity}`,
     author && `de ${author}`,
+    hoursLabel(hour_from, hour_to),
     from && `desde ${isoToBr(from)}`,
     to && `até ${isoToBr(to)}`,
   ].filter(Boolean);
@@ -78,15 +106,17 @@ function HowCalculated({ tool, by }: { tool: ToolCall; by: ChatAnswer["interpret
   );
 }
 
-export function Chat({ id, summary, turns, setTurns, onOpenMessage }: Props) {
+export function Chat({ id, summary, turns, setTurns, onOpenMessage, onOpenListing }: Props) {
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [examples, setExamples] = useState<string[]>([]);
   const [llm, setLlm] = useState<LlmStatus>("off");
+  const [me, setMe] = useState<string | null | undefined>(undefined);
   const end = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api.chatExamples(id).then(setExamples).catch(() => setExamples([]));
+    api.getChatMe(id).then(setMe).catch(() => setMe(undefined));
   }, [id]);
 
   useEffect(() => {
@@ -134,6 +164,11 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage }: Props) {
                 Por enquanto o chat entende perguntas de contagem (quantas vezes, quem mais, qual mês, horários, tempo de
                 resposta). Perguntas sobre o conteúdo e perguntas livres chegam com o modelo de linguagem.
               </p>
+              {me === null && (
+                <p className="note">
+                  Para o chat entender “eu” e “ela”/“ele”, diga quem é você em <b>Configurações</b>.
+                </p>
+              )}
             </div>
           )}
 
@@ -160,6 +195,12 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage }: Props) {
                         );
                       })}
                     </div>
+                  )}
+                  {t.answer.tool?.tool === "list_messages" && listTotal(t.answer) > t.answer.citations.length && (
+                    <button className="btn ink sm"
+                      onClick={() => onOpenListing({ filter: t.answer!.tool!.args, label: listingLabel(t.answer!.tool!.args) })}>
+                      Ver as {fmtInt(listTotal(t.answer))} na conversa →
+                    </button>
                   )}
                   {t.answer.tool && <HowCalculated tool={t.answer.tool} by={t.answer.interpretedBy} />}
                 </div>

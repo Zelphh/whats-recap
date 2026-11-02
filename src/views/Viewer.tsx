@@ -4,10 +4,11 @@ import { api } from "../api";
 import { dayKey, fmtDate, fmtLongDate, fmtTime } from "../format";
 import { Sticker } from "../components/Sticker";
 import { Dot, Icon, type ICONS } from "../components/ui";
-import type { ImportSummary, MessageKind, MessageRow } from "../types";
+import type { ImportSummary, ListFilter, MessageKind, MessageRow } from "../types";
 
 const PAGE = 200;
 const SEARCH_LIMIT = 200;
+const LIST_LIMIT = 1000;
 
 // Folga no topo (para a data flutuante) e no fim da lista.
 const LIST_COMPONENTS = {
@@ -22,11 +23,20 @@ const FILE_KIND: Partial<Record<MessageKind, [string, keyof typeof ICONS]>> = {
   sticker: ["Figurinha", "sticker"],
 };
 
+/** Lista completa de uma resposta do chat (`list_messages`) para o painel de resultados. */
+export interface Listing {
+  filter: ListFilter;
+  /** Título do painel, ex.: "Ana · das 7h às 8h". */
+  label: string;
+}
+
 interface Props {
   id: string;
   summary: ImportSummary;
   jumpTo: number | null;
   onJumpHandled: () => void;
+  listing: Listing | null;
+  onListingHandled: () => void;
 }
 
 /** Trecho do texto em volta da primeira ocorrência da busca, com o termo destacado. */
@@ -43,7 +53,7 @@ function Snippet({ text, query }: { text: string; query: string }) {
 }
 
 /** A conversa inteira em lista virtualizada. As mensagens são buscadas em páginas sob demanda. */
-export function Viewer({ id, summary, jumpTo, onJumpHandled }: Props) {
+export function Viewer({ id, summary, jumpTo, onJumpHandled, listing, onListingHandled }: Props) {
   const pages = useRef(new Map<number, MessageRow[]>());
   const loading = useRef(new Set<number>());
   const [, setVersion] = useState(0);
@@ -58,6 +68,8 @@ export function Viewer({ id, summary, jumpTo, onJumpHandled }: Props) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MessageRow[] | null>(null);
   const [searched, setSearched] = useState("");
+  // O painel mostra a busca ou uma lista vinda do chat.
+  const [panel, setPanel] = useState({ title: "Resultados", limit: SEARCH_LIMIT });
   const [date, setDate] = useState("");
   const [msgNo, setMsgNo] = useState("");
   const [topDay, setTopDay] = useState<string | null>(null);
@@ -115,6 +127,7 @@ export function Viewer({ id, summary, jumpTo, onJumpHandled }: Props) {
       if (seq !== searchSeq.current) return; // chegou uma busca mais nova
       setResults(rows);
       setSearched(q);
+      setPanel({ title: "Resultados", limit: SEARCH_LIMIT });
     } catch (err) {
       setError(String(err));
     }
@@ -130,6 +143,22 @@ export function Viewer({ id, summary, jumpTo, onJumpHandled }: Props) {
     return () => clearTimeout(t);
   }, [query, runSearch]);
 
+  // Depois do efeito da busca: ao abrir a tela, ele limpa o painel e invalidaria esta lista.
+  useEffect(() => {
+    if (!listing) return;
+    const seq = ++searchSeq.current;
+    api
+      .listMessages(id, listing.filter, LIST_LIMIT)
+      .then((rows) => {
+        if (seq !== searchSeq.current) return;
+        setResults(rows);
+        setSearched(listing.filter.word ?? "");
+        setPanel({ title: listing.label, limit: LIST_LIMIT });
+      })
+      .catch((e) => setError(String(e)));
+    onListingHandled();
+  }, [id, listing, onListingHandled]);
+
   async function goToDate(value: string) {
     setDate(value);
     if (!value) return;
@@ -140,7 +169,7 @@ export function Viewer({ id, summary, jumpTo, onJumpHandled }: Props) {
 
   const firstIso = new Date(summary.firstTs * 1000).toISOString().slice(0, 10);
   const lastIso = new Date(summary.lastTs * 1000).toISOString().slice(0, 10);
-  const count = results ? (results.length >= SEARCH_LIMIT ? `${SEARCH_LIMIT}+ resultados` : `${results.length} resultado${results.length === 1 ? "" : "s"}`) : "";
+  const count = results ? (results.length >= panel.limit ? `${panel.limit}+ resultados` : `${results.length} resultado${results.length === 1 ? "" : "s"}`) : "";
 
   return (
     <div className="viewer">
@@ -199,7 +228,7 @@ export function Viewer({ id, summary, jumpTo, onJumpHandled }: Props) {
         {results && (
           <aside className="results" aria-label="Resultados da busca">
             <div className="results-head">
-              <div><b>Resultados</b><span>{count}</span></div>
+              <div><b>{panel.title}</b><span>{count}</span></div>
               <button className="icon-btn" onClick={() => { setQuery(""); setResults(null); }} aria-label="Fechar resultados">
                 <Icon name="close" size={14} stroke={2.4} />
               </button>

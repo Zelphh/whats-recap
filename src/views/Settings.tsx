@@ -5,6 +5,7 @@ import type { Stats, StatsSettings } from "../types";
 interface Props {
   id: string;
   names: string;
+  authors: string[];
   hasMedia: boolean;
   onStats: (s: Stats) => void;
 }
@@ -39,7 +40,49 @@ function Switch({ checked, onChange, label, hint }: { checked: boolean; onChange
   );
 }
 
-export function Settings({ id, names, hasMedia, onStats }: Props) {
+/** Quem faz as perguntas no chat. Salva na hora: não muda as estatísticas. */
+function WhoAmI({ id, authors }: { id: string; authors: string[] }) {
+  const [me, setMe] = useState<string | null | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getChatMe(id).then(setMe).catch((e) => setError(String(e)));
+  }, [id]);
+
+  async function choose(next: string | null) {
+    const prev = me;
+    setMe(next);
+    setError(null);
+    try {
+      await api.setChatMe(id, next);
+    } catch (e) {
+      setMe(prev);
+      setError(String(e));
+    }
+  }
+
+  return (
+    <div className="setting r-a reveal" style={{ "--i": 0, gap: 12 } as React.CSSProperties}>
+      <div>
+        <div className="setting-title">Quem é você nesta conversa?</div>
+        <div className="setting-hint">
+          No chat, “eu” passa a ser você e “ela”/“ele”, a outra pessoa. Salvo na hora; não muda as estatísticas.
+        </div>
+      </div>
+      {me !== undefined && (
+        <div className="seg" role="radiogroup" aria-label="Quem é você">
+          {authors.map((a) => (
+            <button key={a} role="radio" aria-checked={me === a} className={me === a ? "on" : ""} onClick={() => choose(a)}>{a}</button>
+          ))}
+          <button role="radio" aria-checked={me === null} className={me === null ? "on" : ""} onClick={() => choose(null)}>Não dizer</button>
+        </div>
+      )}
+      {error && <div className="setting-hint" role="alert">{error}</div>}
+    </div>
+  );
+}
+
+export function Settings({ id, names, authors, hasMedia, onStats }: Props) {
   const [settings, setSettings] = useState<StatsSettings | null>(null);
   const [stopwords, setStopwords] = useState("");
   const [saving, setSaving] = useState(false);
@@ -91,6 +134,7 @@ export function Settings({ id, names, hasMedia, onStats }: Props) {
 
       <div className="settings-grid">
         <div className="settings-col">
+          <WhoAmI id={id} authors={authors} />
           <div className="setting r-a reveal" style={{ "--i": 1 } as React.CSSProperties}>
             <div>
               <div className="setting-title">Nova conversa depois de</div>

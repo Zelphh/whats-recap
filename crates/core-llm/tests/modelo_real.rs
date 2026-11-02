@@ -35,7 +35,7 @@ fn chooses_the_tool_with_the_real_model() {
     let server = Server::start(&cfg).unwrap();
 
     let authors = vec!["Ana Souza".to_string(), "Bruno".to_string()];
-    let system = llm::tool_selection_prompt(&authors, "2021-03-14", "2026-02-27", "2026-02-27");
+    let system = llm::tool_selection_prompt(&authors, None, "2021-03-14", "2026-02-27", "2026-02-27");
     let out = server
         .client()
         .chat::<ToolCall>(

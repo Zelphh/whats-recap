@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let authors: Vec<String> = AUTHORS.iter().map(|a| a.to_string()).collect();
     // "Hoje" é o fim da conversa fictícia, para "ano passado" dar sempre o mesmo intervalo.
-    let system = llm::tool_selection_prompt(&authors, FIRST, LAST, LAST);
+    let system = llm::tool_selection_prompt(&authors, None, FIRST, LAST, LAST);
     let schema = llm::tool_schema(&authors);
     let date = |s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
     for q in questions {
