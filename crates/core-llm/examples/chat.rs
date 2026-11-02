@@ -5,7 +5,8 @@
 //! cargo run --release -p core-llm --example chat -- conversa.db "a gente conversa mais de semana ou no fim de semana?"
 //! ```
 //!
-//! Usa os mesmos caminhos do example `ferramenta` (`WHATSRECAP_LLAMA_SERVER`, `WHATSRECAP_MODEL`).
+//! Usa os mesmos caminhos do example `ferramenta` (`WHATSRECAP_LLAMA_SERVER`, `WHATSRECAP_MODEL`);
+//! `WHATSRECAP_LLAMA_EXTRA` acrescenta flags ao `llama-server` (ex.: `-lv 4`).
 
 use core_llm::{Server, ServerConfig};
 use serde_json::Value;
@@ -44,6 +45,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         path("WHATSRECAP_MODEL", MODEL),
     );
     cfg.log = Some(std::env::temp_dir().join("whatsrecap-llama-server.log"));
+    // Flags extras para diagnóstico, ex.: WHATSRECAP_LLAMA_EXTRA="-lv 4".
+    if let Ok(extra) = std::env::var("WHATSRECAP_LLAMA_EXTRA") {
+        cfg.args.extend(extra.split_whitespace().map(String::from));
+    }
     let llm = LazyLlm {
         cfg,
         server: OnceCell::new(),

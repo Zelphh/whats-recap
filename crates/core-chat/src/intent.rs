@@ -91,6 +91,16 @@ static PEAK_HOUR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(que horas?|qual (o |a )?(horario|hora)|horario|hora do dia)\b").unwrap());
 static PERIOD_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bqual (?:o |a |foi o |foi a )?(dia da semana|mes|ano|semana|dia)\b").unwrap());
+// Períodos relativos a hoje ou do calendário, que `date_range` não converte: ficam para o LLM, que
+// recebe as datas calculadas. Responder sobre a conversa inteira seria errado.
+static RELATIVE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\b(passad[oa]|ultim[oa]s? (\d+ )?(ano|anos|mes|meses|semana|semanas|dias)|(este|esse|nesse|neste) (ano|mes)|(esta|essa|nessa|nesta) semana|ontem|anteontem|verao|inverno|outono|primavera|ferias|natal|carnaval|ano novo|semestre|trimestre)\b",
+    )
+    .unwrap()
+});
+static WEEKEND_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(fim de semana|fins de semana|dias? (util|uteis))\b").unwrap());
 static WHO_MOST_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bquem\b.*\b(manda|envia|escreve|fala|conversa|digita|puxa|mensag)\w*").unwrap());
 
@@ -186,6 +196,9 @@ fn mentioned_author(q: &str, authors: &[String], exclude: Option<&str>) -> Optio
 pub fn interpret(question: &str, authors: &[String]) -> Option<(ToolCall, Intent)> {
     let q = fold(question);
     let (from, to) = date_range(&q);
+    if from.is_none() && RELATIVE_RE.is_match(&q) {
+        return None;
+    }
     let has = |s: &str| WORD_RE.find_iter(&q).any(|m| m.as_str() == s);
     let most = !has("menos");
     let word = target_word(question, &q);
@@ -216,10 +229,12 @@ pub fn interpret(question: &str, authors: &[String]) -> Option<(ToolCall, Intent
             Intent::ResponseTime { compare },
         ));
     }
-    if let Some(c) = PERIOD_RE.captures(&q)
+    // "de semana ou no fim de semana?" é sobre dias da semana, não semanas do calendário.
+    let weekend = WEEKEND_RE.is_match(&q).then_some("dia da semana");
+    if let Some(period) = weekend.or_else(|| PERIOD_RE.captures(&q).map(|c| c.get(1).unwrap().as_str()))
         && (has("mais") || has("menos"))
     {
-        let granularity = match &c[1] {
+        let granularity = match period {
             "dia da semana" => Granularity::Weekday,
             "mes" => Granularity::Month,
             "ano" => Granularity::Year,
@@ -462,12 +477,34 @@ mod tests {
             }
         );
         assert_eq!(first_name("💚 Ana Souza"), "Ana");
+        let (c, _) = interpret("a gente conversa mais de semana ou no fim de semana?", &authors).unwrap();
+        assert!(matches!(
+            c,
+            ToolCall::MessagesByPeriod {
+                granularity: Granularity::Weekday,
+                ..
+            }
+        ));
         let (c, _) = interpret("Quantas vezes eu disse 'eu te amo'", &authors).unwrap();
         assert_eq!(c.author(), Some("Você"));
         assert!(matches!(&c, ToolCall::CountWord { word, .. } if word == "eu te amo"));
         let (c, _) = interpret("Quantas vezes ela falou 'eu te amo'", &authors).unwrap();
         assert_eq!(c.author(), None);
         assert_eq!(target_word("e o copo d'água?", "e o copo d'agua?"), None);
+    }
+
+    #[test]
+    fn relative_periods_go_to_the_llm() {
+        for q in [
+            "quem mandou mais mensagem no ano passado?",
+            "quantas vezes ela falou amor esse mês?",
+            "quem respondeu mais rápido nos últimos 3 meses?",
+            "qual dia a gente mais conversou nas férias?",
+        ] {
+            assert!(interpret(q, &authors()).is_none(), "{q}");
+        }
+        // Com data explícita, as regras continuam respondendo.
+        assert!(interpret("quantas vezes ela falou amor no verão de 2024?", &authors()).is_some());
     }
 
     #[test]

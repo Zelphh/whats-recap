@@ -70,8 +70,13 @@ impl Server {
                 "--port",
                 &port.to_string(),
                 "--no-webui",
+                // Um slot por prompt de sistema (roteador e seleção de ferramenta): cada um mantém
+                // o seu cache na VRAM. Sem o cache em RAM, que copiava o slot ocioso (~58 MiB) a
+                // cada troca: com ele, ou com um slot só, cada chamada custava ~1 s a mais no Qwen3.5.
                 "-np",
-                "1",
+                "2",
+                "--cache-ram",
+                "0",
             ])
             .args(&cfg.args)
             .stdin(Stdio::null())

@@ -1,8 +1,10 @@
 //! Contrato com o LLM: schemas JSON para saída estruturada no `llama-server` (`json_schema`) e
 //! os prompts. As versões daqui são as que venceram no `whatsrecap-evals` (Qwen3.5 9B, RX 7600):
-//! roteador com exemplos (98% de acerto) e seleção de ferramenta com a data de hoje e a saída
-//! "nenhuma ferramenta" (76% de acerto exato, 100% na ferramenta).
+//! roteador com exemplos (98% de acerto) e seleção de ferramenta com datas relativas já calculadas,
+//! regras de autor em comparações, "nenhuma ferramenta" e exemplos (93% de acerto exato em B com
+//! 50 perguntas; era 73% antes dessas regras).
 
+use chrono::{Datelike, Months, NaiveDate};
 use serde_json::{Value, json};
 
 /// Schema da classificação da pergunta: `{"type": "quantitative" | "retrieval" | "global"}`.
@@ -81,25 +83,57 @@ pub fn tool_schema(authors: &[String]) -> Value {
 }
 
 /// Prompt de sistema para escolher a ferramenta. Datas em `AAAA-MM-DD`; `today` resolve datas
-/// relativas ("ano passado").
+/// relativas ("ano passado"), que já vão calculadas no prompt: o modelo errava a conta (trocava
+/// "ano passado" pelos últimos 12 meses).
 pub fn tool_selection_prompt(authors: &[String], first_date: &str, last_date: &str, today: &str) -> String {
     format!(
-        "Você escolhe UMA ferramenta para responder a uma pergunta sobre uma conversa de WhatsApp entre {} \
-(de {first_date} a {last_date}). Você não lê a conversa: só escolhe a ferramenta e preenche os parâmetros.\n\n\
-Ferramentas:\n\
-- count_word(word, author?, from?, to?): quantas vezes uma palavra ou expressão curta aparece.\n\
-- messages_by_hour(author?, from?, to?): mensagens por hora do dia (0–23), por pessoa. Use para \"de madrugada\", \"que horas\", \"quem manda mais\".\n\
-- messages_by_period(granularity, author?, from?, to?): mensagens por dia, semana, mês, ano ou dia da semana.\n\
-- first_occurrence(word, author?): a primeira mensagem com a palavra ou expressão.\n\
-- response_time(author?, from?, to?): tempo de resposta (média e mediana) por pessoa.\n\n\
-Regras: datas no formato AAAA-MM-DD, inclusivas; omita parâmetros não mencionados; \"author\" só quando a \
-pergunta for sobre uma pessoa específica (em \"quem...?\", compare as duas e omita).\n\n\
-Hoje é {today}. Converta datas relativas (\"ano passado\", \"mês passado\", \"no verão\") em intervalos \
-AAAA-MM-DD a partir de hoje; o verão vai de 21 de dezembro a 20 de março. Apelidos e pronomes (\"ela\", \"ele\", \
-\"a Aninha\") se referem a uma das duas pessoas pelo nome. Em count_word e first_occurrence, \"word\" é só a \
-palavra ou expressão procurada, sem aspas, como a pessoa escreveria. Se nenhuma ferramenta responde (ex.: brigas, \
-sentimentos, assuntos), use {{\"tool\":\"{NO_TOOL}\",\"args\":{{}}}}.",
-        authors.join(" e ")
+        "Você escolhe UMA ferramenta para responder a uma pergunta sobre uma conversa de WhatsApp entre {} (de {first_date} a {last_date}). Você não lê a conversa: só escolhe a ferramenta e preenche os parâmetros.
+
+Ferramentas:
+- count_word(word, author?, from?, to?): quantas vezes uma palavra ou expressão curta aparece, por pessoa.
+- messages_by_hour(author?, from?, to?): mensagens por hora do dia (0–23), por pessoa. Use para partes do dia (madrugada, manhã, tarde, noite, \"de dia\"), \"que horas\" e \"quem manda mais mensagem\".
+- messages_by_period(granularity, author?, from?, to?): mensagens por período. granularity: \"weekday\" para dia da semana, segunda a domingo, \"semana ou fim de semana\"; \"day\" para um dia do calendário; \"week\" para semanas do calendário (\"qual semana\", \"por semana\"); \"month\" para meses, épocas e estações do ano; \"year\" para anos.
+- first_occurrence(word, author?): a primeira mensagem com a palavra ou expressão.
+- response_time(author?, from?, to?): tempo de resposta (média e mediana) por pessoa.
+
+Pessoas: apelidos e pronomes (\"ela\", \"ele\", \"a Aninha\") se referem a uma das duas pelo nome. Quem pergunta é uma das duas, mas você não sabe qual: \"eu\", \"me\" e \"mim\" nunca viram \"author\". Preencha \"author\" só quando a pergunta for sobre UMA pessoa. Em comparações (\"quem...?\", \"X ou Y?\", \"eu ou ela?\", \"quem fala mais...\"), omita \"author\": as ferramentas já devolvem os números das duas.
+
+Datas: AAAA-MM-DD, inclusivas; omita \"from\" e \"to\" quando a pergunta não fala de período. Hoje é {today}. {}Outros períodos (meses, estações) também viram \"from\" e \"to\"; o verão vai de 21 de dezembro a 20 de março.
+
+Em count_word e first_occurrence, \"word\" é só a palavra ou expressão procurada, sem aspas, como a pessoa escreveria. Se nenhuma ferramenta responde, use {{\"tool\":\"{NO_TOOL}\",\"args\":{{}}}}: brigas, sentimentos, assuntos, opiniões, contagem de mídia (figurinhas, áudios, fotos, vídeos) e categorias de palavras (palavrões, emojis em geral). Nunca troque uma categoria por uma palavra ou emoji de exemplo.
+
+Exemplos (sem as datas):
+\"quem fala mais 'bom dia', eu ou ele?\" → {{\"tool\":\"count_word\",\"args\":{{\"word\":\"bom dia\"}}}}
+\"quantas vezes eu falei 'oi'?\" → {{\"tool\":\"count_word\",\"args\":{{\"word\":\"oi\"}}}}
+\"quem demora mais pra responder?\" → {{\"tool\":\"response_time\",\"args\":{{}}}}
+\"falamos mais no sábado ou na segunda?\" → {{\"tool\":\"messages_by_period\",\"args\":{{\"granularity\":\"weekday\"}}}}",
+        authors.join(" e "),
+        relative_dates(today)
+    )
+}
+
+/// "ano passado = 2025-01-01 a 2025-12-31; …" a partir de `today` (vazio se a data for inválida).
+fn relative_dates(today: &str) -> String {
+    let Ok(t) = NaiveDate::parse_from_str(today, "%Y-%m-%d") else {
+        return String::new();
+    };
+    let d = |y: i32, m: u32, day: u32| NaiveDate::from_ymd_opt(y, m, day).unwrap_or(t);
+    let month_start = d(t.year(), t.month(), 1);
+    let last_month_end = month_start.pred_opt().unwrap_or(t);
+    let year_ago = t.checked_sub_months(Months::new(12)).unwrap_or(t);
+    let iso = |x: NaiveDate| x.format("%Y-%m-%d").to_string();
+    format!(
+        "Use estes intervalos: \"este ano\" = {} a {}; \"ano passado\" = {} a {}; \"este mês\" = {} a {}; \"mês passado\" = {} a {}; \"último ano\" ou \"últimos 12 meses\" = {} a {}. ",
+        iso(d(t.year(), 1, 1)),
+        iso(t),
+        iso(d(t.year() - 1, 1, 1)),
+        iso(d(t.year() - 1, 12, 31)),
+        iso(month_start),
+        iso(t),
+        iso(d(last_month_end.year(), last_month_end.month(), 1)),
+        iso(last_month_end),
+        iso(year_ago),
+        iso(t),
     )
 }
 
@@ -159,6 +193,20 @@ mod tests {
         let s = serde_json::to_string(&tool_schema(&["Ana".into(), "Bruno".into()])).unwrap();
         let branches = s.matches(r#""properties":{"tool":"#).count();
         assert_eq!(branches, 6, "\"tool\" tem de vir antes de \"args\" em cada ramo: {s}");
+    }
+
+    #[test]
+    fn relative_dates_are_computed() {
+        let p = tool_selection_prompt(
+            &["Ana".into(), "Bruno".into()],
+            "2021-03-14",
+            "2026-03-31",
+            "2026-03-31",
+        );
+        assert!(p.contains("\"ano passado\" = 2025-01-01 a 2025-12-31"), "{p}");
+        assert!(p.contains("\"mês passado\" = 2026-02-01 a 2026-02-28"), "{p}");
+        assert!(p.contains("\"últimos 12 meses\" = 2025-03-31 a 2026-03-31"), "{p}");
+        assert!(!tool_selection_prompt(&[], "", "", "ontem").contains("ano passado\" ="));
     }
 
     #[test]

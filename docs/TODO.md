@@ -39,8 +39,12 @@ compila o app e passa em `cargo test --workspace`.
 - [x] **Normalizar datas da `ToolCall`.** `ToolCall::without_redundant_range` descarta `from`/`to`
       que não restringem nada. Com as duas correções, B no Qwen 9B (v2) foi de 14% para 76%.
 - [x] **Usar `without_redundant_range` no caminho do LLM** (fase 8), antes de executar a ferramenta
-- [ ] **Prompt de B:** "quem…?" ainda vem com `author`, "eu" vira uma das pessoas, `weekday` ×
-      `day`/`week`, "ano passado" vira os últimos 12 meses em vez do ano civil
+- [x] **Prompt de B** (2026-11-01): datas relativas calculadas no código e passadas prontas no prompt,
+      regras de autor ("eu" nunca é autor; comparações sem autor), granularidades descritas, mídia e
+      categorias → `none`, quatro exemplos. B (50 itens, 10 novos) foi de 72,7% para 93,2% no Qwen 9B;
+      p50 de 1,08 s para 0,62 s (os exemplos ensinam a omitir datas redundantes). Restam t04 ("eu
+      falei 'bruno'" vira autor Ana), t26 ("ela demora" sem autor) e t28 (`week`; resolvido pelas
+      regras fixas)
 - [ ] **Flash attention por modelo.** No Vulkan/Windows, `-fa on` deixa os Qwen 2–2,5× mais lentos
       no `llama-server` (modo completo 5,7 h → 2,4 h no 4B); o Gemma é o contrário (geração cai de
       32 para 19 tok/s sem FA). O sidecar precisa de flags por modelo.
@@ -78,13 +82,18 @@ compila o app e passa em `cargo test --workspace`.
 - [x] Resposta "fora do escopo" quando nenhuma ferramenta serve (`{"tool":"none"}`)
 - [x] Testar no app e com o example `chat` do `core-llm` (fluxo completo numa conversa sintética).
       Achados (2026-10-31), somam-se ao item de prompt de B:
-  - [ ] "de semana ou no fim de semana?" → `week` em vez de `weekday`
-  - [ ] "quantas figurinhas ela mandou?" → `count_word "sticker"` em vez de `none`
-  - [ ] "verão passado" → só `from` (falta o `to`); "época do ano" → `year` em vez de `month`
+  - [x] "de semana ou no fim de semana?" → `weekday` (regra fixa nova)
+  - [x] "quantas figurinhas ela mandou?" → `none`
+  - [x] "época do ano" → `month`; "verão passado" e "ano passado" com o intervalo certo
+  - [x] Regras fixas não respondem mais períodos relativos ("ano passado", "esse mês", "nas
+        férias") sobre a conversa inteira: deixam para o LLM
   - [ ] "de noite ou de dia?": a resposta só traz a noite; o template precisa comparar as duas
         partes do dia quando a pergunta tem "X ou Y"
-  - [ ] Latência: 5–7 s nas perguntas que passam pelo roteador e pela ferramenta (no benchmark era
-        ~2 s por chamada); medir prompt × geração no log
+  - [x] Latência: de 3–5 s para 1,2–1,9 s por pergunta livre. Com um slot, o `llama-server`
+        trocava o cache do roteador pelo da ferramenta e salvava o slot ocioso no cache em RAM
+        (~1 s por chamada); agora `-np 2 --cache-ram 0`
+  - [ ] Primeira pergunta livre ainda leva ~6 s além da carga (processa os dois prompts de
+        sistema): aquecer os dois slots logo após subir o servidor
 - [x] Aviso na interface enquanto o modelo carrega na primeira pergunta livre (~9 s)
 - [ ] Redação pelo LLM (opcional): manter os templates de `answer.rs` como padrão/fallback
 - [ ] Ferramenta `list_messages` (filtro exato, sem contagem nem RAG): autor, faixa de horas, datas
