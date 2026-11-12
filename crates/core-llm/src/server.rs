@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 /// Flags do modelo escolhido (Qwen3.5 9B `IQ4_XS`) na RX 7600, medidas no `whatsrecap-evals`
 /// (`COMPARACAO-MODELOS.md`): todas as camadas na GPU, contexto de 16k e **sem flash attention**,
 /// que no Vulkan deixa o Qwen3.5 2–2,5× mais lento. `--reasoning off`: as saídas são JSON curto.
+/// O app monta as flags por modelo e backend com [`crate::Choice::args`].
 pub const RECOMMENDED_ARGS: &[&str] = &["-ngl", "99", "-c", "16384", "-fa", "off", "--reasoning", "off"];
 
 #[derive(Debug, Clone)]
@@ -142,11 +143,11 @@ fn log_tail(path: &Path) -> String {
 
 /// No Windows, um processo de console aberto por um app gráfico abre uma janela preta.
 #[cfg(windows)]
-fn hide_console(cmd: &mut Command) {
+pub(crate) fn hide_console(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(windows))]
-fn hide_console(_: &mut Command) {}
+pub(crate) fn hide_console(_: &mut Command) {}

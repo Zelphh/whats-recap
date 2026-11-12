@@ -44,6 +44,7 @@ const SLOW_MS = 700;
 const PENDING: Record<LlmStatus, string> = {
   off: "Calculando…",
   idle: "Carregando o modelo de linguagem… só na primeira pergunta livre, leva uns 10 segundos.",
+  loading: "Carregando o modelo de linguagem… só na primeira pergunta livre, leva uns 10 segundos.",
   ready: "Interpretando a pergunta com o modelo de linguagem…",
 };
 
@@ -117,6 +118,13 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage, onOpenListin
   useEffect(() => {
     api.chatExamples(id).then(setExamples).catch(() => setExamples([]));
     api.getChatMe(id).then(setMe).catch(() => setMe(undefined));
+    // Sobe o modelo e aquece os prompts desta conversa enquanto a pessoa escreve a pergunta.
+    let alive = true;
+    api.llmStatus().then((s) => alive && setLlm(s)).catch(() => {});
+    api.llmPrepare(id)
+      .catch(() => {}) // o erro aparece na pergunta (e nas configurações)
+      .finally(() => api.llmStatus().then((s) => alive && setLlm(s)).catch(() => {}));
+    return () => { alive = false; };
   }, [id]);
 
   useEffect(() => {
@@ -164,6 +172,11 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage, onOpenListin
                 Por enquanto o chat entende perguntas de contagem (quantas vezes, quem mais, qual mês, horários, tempo de
                 resposta). Perguntas sobre o conteúdo e perguntas livres chegam com o modelo de linguagem.
               </p>
+              {llm === "off" && (
+                <p className="note">
+                  Para perguntas em outras palavras, baixe o modelo de linguagem em <b>Configurações</b>.
+                </p>
+              )}
               {me === null && (
                 <p className="note">
                   Para o chat entender “eu” e “ela”/“ele”, diga quem é você em <b>Configurações</b>.

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Stats, StatsSettings } from "../types";
+import { LlmPanel } from "../components/LlmPanel";
 
 interface Props {
   id: string;
@@ -190,6 +191,8 @@ export function Settings({ id, names, authors, hasMedia, onStats }: Props) {
           <textarea id="stop" className="stopwords" rows={14} spellCheck={false} value={stopwords} onChange={(e) => setStopwords(e.target.value)} />
         </div>
       </div>
+
+      <LlmPanel />
 
       <div className="save-bar">
         <button className="btn primary" disabled={saving} onClick={save}>

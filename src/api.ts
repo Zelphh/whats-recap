@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ChatAnswer, ConversationInfo, ImportSummary, ListFilter, LlmStatus, MessageRow, Stats, StatsSettings } from "./types";
+import type { ChatAnswer, ConversationInfo, ImportSummary, ListFilter, LlmInfo, LlmStatus, MessageRow, Stats, StatsSettings } from "./types";
 
 export const api = {
   listConversations: () => invoke<ConversationInfo[]>("list_conversations"),
@@ -23,5 +23,11 @@ export const api = {
   getChatMe: (id: string) => invoke<string | null>("get_chat_me", { id }),
   setChatMe: (id: string, me: string | null) => invoke<void>("set_chat_me", { id, me }),
   llmStatus: () => invoke<LlmStatus>("llm_status"),
+  llmInfo: () => invoke<LlmInfo>("llm_info"),
+  llmPrepare: (id: string) => invoke<void>("llm_prepare", { id }),
+  llmStop: () => invoke<void>("llm_stop"),
+  llmDownload: (modelId: string) => invoke<void>("llm_download", { modelId }),
+  llmCancelDownload: () => invoke<void>("llm_cancel_download"),
+  llmDeleteModel: (modelId: string) => invoke<void>("llm_delete_model", { modelId }),
   locateDate: (id: string, date: string) => invoke<number | null>("locate_date", { id, date }),
 };

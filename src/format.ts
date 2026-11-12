@@ -17,6 +17,11 @@ export const fmtDate = (ts: number) => dateFmt.format(ts * 1000);
 export const fmtTime = (ts: number) => timeFmt.format(ts * 1000);
 export const fmtDateTime = (ts: number) => `${fmtDate(ts)} ${fmtTime(ts)}`;
 export const fmtLongDate = (ts: number) => longDateFmt.format(ts * 1000);
+/** Tamanho de arquivo: "4,8 GB", "350 MB" (base 1024, como o Explorador do Windows). */
+export function fmtBytes(n: number) {
+  const gb = n / 1024 ** 3;
+  return gb >= 1 ? `${decFmt.format(gb)} GB` : `${intFmt.format(Math.round(n / 1024 ** 2))} MB`;
+}
 export const dayKey = (ts: number) => Math.floor(ts / 86400);
 
 /** "2024-03-05" → timestamp (segundos, UTC). */

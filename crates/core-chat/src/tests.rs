@@ -472,3 +472,57 @@ fn intent_follows_the_question() {
         Intent::TopPeriod { most: false }
     );
 }
+
+#[test]
+fn compares_parts_of_the_day() {
+    with_db(|db| {
+        // Dia (6h–17h): 6 mensagens; noite (18h–23h): 1.
+        let a = ask_ok(db, "A gente conversa mais de noite ou de dia?");
+        assert_eq!(a.interpreted_by, Some(Interpreter::Heuristic));
+        assert_eq!(
+            a.text,
+            "Vocês conversam mais de dia (6h–17h): 6 mensagens, contra 1 de noite (18h–23h). Por hora, a média é de 0,2 de noite e 0,5 de dia."
+        );
+        let a = ask_ok(db, "o Bruno manda menos mensagem de madrugada ou de manhã?");
+        assert_eq!(
+            a.text,
+            "Bruno manda menos mensagens de madrugada (0h–5h): 1 mensagem, contra 2 de manhã (6h–11h)."
+        );
+
+        // Escolhida pelo modelo: a resposta compara as partes que a pergunta cita.
+        let fake = FakeLlm::new("quantitative", json!({ "tool": "messages_by_hour", "args": {} }));
+        let a = ask(db, "é mais de madrugada, de manhã ou de tarde?", Some(&fake)).unwrap();
+        // Faixas do mesmo tamanho: sem a média por hora.
+        assert_eq!(
+            a.text,
+            "Vocês conversam mais de manhã (6h–11h): 4 mensagens, contra 3 de madrugada (0h–5h) e 2 de tarde (12h–17h)."
+        );
+    });
+}
+
+#[test]
+fn parts_of_the_day_in_the_question() {
+    use intent::{DAYTIME, PARTS_OF_DAY, parts_of_day};
+    let names = |q: &str| parts_of_day(q).iter().map(|p| p.2).collect::<Vec<_>>();
+    assert_eq!(names("a gente conversa mais de noite ou de dia?"), ["noite", "dia"]);
+    assert_eq!(names("durante o dia ou de madrugada"), ["dia", "madrugada"]);
+    assert_eq!(names("qual dia da semana tem mais mensagens?"), Vec::<&str>::new());
+    assert_eq!(names("o que ela mandou de dia 15 a 20?"), Vec::<&str>::new());
+    assert_eq!(parts_of_day("de manha")[0], PARTS_OF_DAY[1]);
+    assert_eq!(parts_of_day("quantas mensagens de dia")[0], DAYTIME);
+}
+
+#[test]
+fn warmup_prompts_are_the_ones_the_questions_use() {
+    with_db(|db| {
+        let prompts = llm_prompts(db).unwrap();
+        let fake = FakeLlm::new("quantitative", json!({ "tool": "messages_by_hour", "args": {} }));
+        ask(db, "oi, tudo bem?", Some(&fake)).unwrap();
+        let calls = fake.calls.borrow();
+        assert_eq!(calls.len(), 2, "roteador e ferramenta");
+        for ((system, _, schema), (p_system, p_schema)) in calls.iter().zip(&prompts) {
+            assert_eq!(system, p_system);
+            assert_eq!(schema, p_schema);
+        }
+    });
+}

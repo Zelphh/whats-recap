@@ -187,5 +187,53 @@ export interface ChatAnswer {
   citations: MessageRow[];
 }
 
-/** Modelo de linguagem do chat: ausente (só regras fixas), ainda não carregado ou pronto. */
-export type LlmStatus = "off" | "idle" | "ready";
+/** Modelo de linguagem do chat: ausente (só regras fixas), ainda não carregado, carregando ou pronto. */
+export type LlmStatus = "off" | "idle" | "loading" | "ready";
+
+export interface LlmDevice {
+  id: string;
+  name: string;
+  totalMib: number;
+  freeMib: number;
+}
+
+export interface LlmModel {
+  id: string;
+  name: string;
+  file: string;
+  size: number;
+  minVramMib: number;
+  downloaded: boolean;
+  /** Baixado pelo app (pode ser apagado pelas configurações). */
+  removable: boolean;
+  path: string | null;
+  /** Bytes de um download interrompido, que será retomado. */
+  partialBytes: number | null;
+  downloading: boolean;
+}
+
+export interface LlmActive {
+  modelId: string;
+  modelName: string;
+  backend: "gpu" | "cpu";
+  device: string | null;
+}
+
+export interface LlmInfo {
+  status: LlmStatus;
+  /** O llama-server foi encontrado na instalação. */
+  runtime: boolean;
+  gpu: LlmDevice | null;
+  models: LlmModel[];
+  active: LlmActive | null;
+  /** O que vai carregar na próxima pergunta livre. */
+  next: LlmActive | null;
+  lastError: string | null;
+}
+
+export interface LlmDownloadEvent {
+  modelId: string;
+  phase: "resume" | "download";
+  done: number;
+  total: number;
+}

@@ -645,6 +645,16 @@ code.kbd { font-family: var(--f-mono); background: var(--lime); color: var(--lim
   background: var(--surf); border: 1px solid var(--line); box-shadow: 0 16px 40px -24px var(--shadow);
 }
 .save-bar [role="status"] { font-size: 14px; color: var(--ink2); padding: 0 8px; }
+.llm-panel { margin-top: 16px; border-radius: 36px; }
+.llm-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 15px; font-weight: 600; }
+.llm-models { display: flex; flex-direction: column; gap: 8px; }
+.llm-model { padding: 16px 18px; border-radius: 24px; background: var(--surf2); display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.llm-model-name { font-weight: 800; font-size: 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.llm-actions { display: flex; gap: 8px; flex: none; }
+.llm-progress { display: flex; flex-direction: column; gap: 6px; }
+.llm-progress .meter { background: var(--surf); }
+.llm-progress .meter div { transition: width 0.25s linear; }
+.llm-path { font-family: var(--f-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- chat ---------- */
 .chat { display: flex; flex-direction: column; height: 100%; }

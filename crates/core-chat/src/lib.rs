@@ -241,16 +241,37 @@ fn llm_route(llm: &dyn Llm, question: &str) -> Result<Route, String> {
     serde_json::from_value(out["type"].clone()).map_err(|e| format!("classificação inválida: {e}"))
 }
 
-/// Escolhe a ferramenta pelo LLM. `None`: nenhuma ferramenta responde a pergunta.
-fn llm_tool(llm: &dyn Llm, db: &Db, conv: &Conversation, question: &str) -> Result<Option<ToolCall>, String> {
-    let authors = &conv.authors;
-    let summary = db.summary().map_err(|e| e.to_string())?;
+/// Primeiro e último dia da conversa.
+fn conversation_span(db: &Db) -> Result<(NaiveDate, NaiveDate), core_storage::StorageError> {
+    let summary = db.summary()?;
     let date = |ts: i64| chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default().date_naive();
-    let (first, last) = (date(summary.first_ts), date(summary.last_ts));
+    Ok((date(summary.first_ts), date(summary.last_ts)))
+}
+
+/// Prompt de sistema da seleção de ferramenta nesta conversa (com a data de hoje).
+fn tool_prompt(conv: &Conversation, (first, last): (NaiveDate, NaiveDate)) -> String {
     let today = chrono::Local::now().date_naive();
     let iso = |d: NaiveDate| d.format("%Y-%m-%d").to_string();
-    let system = llm::tool_selection_prompt(authors, conv.me.as_deref(), &iso(first), &iso(last), &iso(today));
-    let out = llm.complete(&system, question, &llm::tool_schema(authors), TOOL_MAX_TOKENS)?;
+    llm::tool_selection_prompt(&conv.authors, conv.me.as_deref(), &iso(first), &iso(last), &iso(today))
+}
+
+/// Prompts de sistema e schemas que o chat manda ao LLM nesta conversa (roteador e seleção de
+/// ferramenta). O app manda os dois logo que o servidor sobe, um em cada slot, para que a primeira
+/// pergunta não pague o processamento deles (~1,2 s a mais no Qwen3.5 9B na RX 7600).
+pub fn llm_prompts(db: &Db) -> Result<Vec<(String, Value)>, ToolError> {
+    let conv = Conversation::open(db)?;
+    let span = conversation_span(db)?;
+    Ok(vec![
+        (llm::router_prompt(), llm::router_schema()),
+        (tool_prompt(&conv, span), llm::tool_schema(&conv.authors)),
+    ])
+}
+
+/// Escolhe a ferramenta pelo LLM. `None`: nenhuma ferramenta responde a pergunta.
+fn llm_tool(llm: &dyn Llm, db: &Db, conv: &Conversation, question: &str) -> Result<Option<ToolCall>, String> {
+    let (first, last) = conversation_span(db).map_err(|e| e.to_string())?;
+    let system = tool_prompt(conv, (first, last));
+    let out = llm.complete(&system, question, &llm::tool_schema(&conv.authors), TOOL_MAX_TOKENS)?;
     if out["tool"] == llm::NO_TOOL {
         return Ok(None);
     }

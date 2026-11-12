@@ -45,9 +45,9 @@ compila o app e passa em `cargo test --workspace`.
       p50 de 1,08 s para 0,62 s (os exemplos ensinam a omitir datas redundantes). Restam t04 ("eu
       falei 'bruno'" vira autor Ana), t26 ("ela demora" sem autor) e t28 (`week`; resolvido pelas
       regras fixas)
-- [ ] **Flash attention por modelo.** No Vulkan/Windows, `-fa on` deixa os Qwen 2–2,5× mais lentos
+- [x] **Flash attention por modelo.** No Vulkan/Windows, `-fa on` deixa os Qwen 2–2,5× mais lentos
       no `llama-server` (modo completo 5,7 h → 2,4 h no 4B); o Gemma é o contrário (geração cai de
-      32 para 19 tok/s sem FA). O sidecar precisa de flags por modelo.
+      32 para 19 tok/s sem FA). Flags por modelo em `ModelSpec::args` (`core-llm/src/models.rs`)
 
 ## 2. Fase 5 — Infraestrutura de LLM no app
 
@@ -60,19 +60,35 @@ compila o app e passa em `cargo test --workspace`.
       filho (porta livre, espera o `/health`, sem janela de console, encerra no `Drop`)
 - [x] Example `ferramenta` e teste `--ignored` do `core-llm` com o Qwen3.5 9B na RX 7600: carga em ~9 s,
       ~2 s por pergunta, ferramentas e datas certas
-- [ ] `llama-server` como sidecar do Tauri
-  - [ ] Binário em `externalBin` com o sufixo do target (`llama-server-x86_64-pc-windows-msvc.exe`)
-  - [ ] DLLs do ggml/Vulkan como recursos do bundle
-  - [x] Iniciar sob demanda (primeira pergunta que precisar do LLM) e encerrar ao fechar o app
-        (`LlmState` em `src-tauri`; por enquanto acha os arquivos por `WHATSRECAP_LLAMA_SERVER`/
-        `WHATSRECAP_MODEL` ou, em debug, na pasta do `whatsrecap-evals`)
-  - [ ] Flags do Qwen3.5 9B: `-ngl 99 -c 16384 -fa off --reasoning off` (ajustar se o teste de
-        VRAM pedir `-c 8192`/`-ctk q8_0`)
-  - [ ] Fallback para o 4B (ou CPU) se a GPU não tiver VRAM livre suficiente
-- [ ] Download do modelo pelo app na primeira vez (`unsloth/Qwen3.5-9B-GGUF`,
-      `Qwen3.5-9B-IQ4_XS.gguf`, 4,8 GiB; progresso, retomada, checagem de tamanho/hash); o GGUF não
-      entra no instalador
-- [ ] Tela de status do LLM nas configurações (modelo, baixado ou não, GPU detectada)
+- [x] `llama-server` no instalador
+  - [x] Em vez de `externalBin` (que só leva o `.exe`), a pasta `src-tauri/llama/` inteira vai como
+        recurso: o executável precisa das DLLs ao lado (ggml, Vulkan, variantes de CPU, OpenMP e o
+        runtime do Visual C++). `scripts/setup-llama.ps1` prepara a pasta (b11938, 84 MB); o
+        conteúdo não vai para o git
+  - [x] Iniciar ao abrir o chat (ou na primeira pergunta livre) e encerrar ao fechar o app ou pelo
+        botão "Descarregar". Caminhos: `WHATSRECAP_LLAMA_SERVER`, `<recursos>/llama/` ou, em debug,
+        o `whatsrecap-evals`; modelos em `<app_data>/models` (`WHATSRECAP_MODELS_DIR`) ou, em debug,
+        nos `models/` do evals
+  - [x] Flags do Qwen3.5 9B: `-ngl 99 -c 16384 -fa off --reasoning off`, com `-dev` na GPU escolhida
+        (ajustar se o teste de VRAM pedir `-c 8192`/`-ctk q8_0`)
+  - [x] Fallback: `--list-devices` dá a VRAM livre; tenta o maior modelo baixado que cabe na GPU
+        (9B: 6 GB livres; 4B: 3,5 GB), o próximo se a carga falhar e, por último, o menor na CPU
+        (`-ngl 0 -c 8192 -dev none`)
+  - [ ] Testar o instalador numa máquina sem o Visual C++ Redistributable
+  - [ ] **A VRAM livre do `--list-devices` não enxerga outros processos.** Com o 4B carregado por
+        outro processo, continuou em 7.362 MiB; com o 9B, caiu só ~1,7 GB. A escolha GPU/CPU por
+        memória livre não protege de um jogo ocupando a placa (o fallback por falha na carga
+        continua valendo, mas o Vulkan no Windows pode transbordar para a RAM em vez de falhar).
+        Ler a memória pelo DXGI (`QueryVideoMemoryInfo`) ou pelos contadores de GPU (`typeperf`,
+        como o evals faz)
+- [x] Download do modelo pelo app (Hugging Face, 9B de 4,8 GiB ou 4B de 2,6 GiB; progresso,
+      pausa e retomada por `Range`, checagem de tamanho e SHA-256 antes de renomear o `.partial`)
+- [x] Tela de status do LLM nas configurações (o que está carregado e onde, GPU e VRAM livre,
+      baixar, pausar, apagar e descarregar)
+- [x] Fluxo do app com o modelo real (conversa sintética de 5 anos, 2026-11-12): plano GPU/CPU,
+      carga, aquecimento e perguntas. Por pergunta livre, depois do aquecimento: 9B na GPU ~1 s,
+      4B na GPU 0,5–0,9 s, 4B na CPU 1,6–3,8 s (aquecimento de 14 s)
+- [ ] Testar na interface: download completo pelo app (4,8 GB), pausa/retomada e o painel
 
 ## 3. Fase 8 — Chat tipo 1 com LLM
 
@@ -87,13 +103,16 @@ compila o app e passa em `cargo test --workspace`.
   - [x] "época do ano" → `month`; "verão passado" e "ano passado" com o intervalo certo
   - [x] Regras fixas não respondem mais períodos relativos ("ano passado", "esse mês", "nas
         férias") sobre a conversa inteira: deixam para o LLM
-  - [ ] "de noite ou de dia?": a resposta só traz a noite; o template precisa comparar as duas
-        partes do dia quando a pergunta tem "X ou Y"
+  - [x] "de noite ou de dia?": compara as partes do dia citadas ("de dia" = 6h–17h), com a média
+        por hora quando as faixas têm tamanhos diferentes (regra fixa e intenção do LLM)
   - [x] Latência: de 3–5 s para 1,2–1,9 s por pergunta livre. Com um slot, o `llama-server`
         trocava o cache do roteador pelo da ferramenta e salvava o slot ocioso no cache em RAM
         (~1 s por chamada); agora `-np 2 --cache-ram 0`
-  - [ ] Primeira pergunta livre ainda leva ~6 s além da carga (processa os dois prompts de
-        sistema): aquecer os dois slots logo após subir o servidor
+  - [x] Primeira pergunta livre pagava a carga e os dois prompts de sistema: o servidor sobe ao
+        abrir o chat e aquece os dois slots com os prompts da conversa (`core_chat::llm_prompts`,
+        `Client::warm`). Medido (2026-11-12, conversa sintética de 5 anos): carga 4–10 s,
+        aquecimento ~2 s em sequência (em paralelo levava 9 s), primeira pergunta livre de 2,7 s
+        para 1,1 s
 - [x] Aviso na interface enquanto o modelo carrega na primeira pergunta livre (~9 s)
 - [ ] Redação pelo LLM (opcional): manter os templates de `answer.rs` como padrão/fallback
 - [x] Ferramenta `list_messages` (filtro exato, sem contagem nem RAG): autor, datas, faixa de horas
@@ -106,7 +125,14 @@ compila o app e passa em `cargo test --workspace`.
         "eu" vira você e "ela"/"ele"/"dela"/"dele", a outra pessoa, nas regras fixas e no prompt
         da seleção de ferramenta (sem a escolha, o prompt é o mesmo medido no evals)
   - [x] Schema e prompt da seleção de ferramenta no `llm.rs`; exemplo no roteador; casos t51–t55 no B
-  - [ ] Rodar B no Qwen 9B com a ferramenta nova (os outros 50 itens podem mudar com o prompt maior)
+  - [x] B no Qwen 9B com a ferramenta nova (2026-11-12): 91,8% (55 itens; era 93,2% com 50). Os
+        cinco novos (t51–t55) passam; erra t04, t26, t28 (já conhecidos) e t07 ("quem manda mais
+        mensagem de madrugada?" ganhou autor; no app, as regras fixas respondem antes). p50 de
+        0,99 s (era 0,62 s; o prompt cresceu)
+  - [ ] Achados no teste do fluxo: "quem é mais tagarela de nós dois?" vira `messages_by_period`
+        por dia (devia comparar quem manda mais); "mostra o que a Ana mandou no natal do ano
+        passado" cai no roteador como conteúdo (`retrieval`) em vez de `list_messages`; o 4B ignora
+        "no ano passado" em `response_time`
 - [x] "eu"/"eu disse" na pergunta apontar para o autor "Você" (export do iOS/Android do próprio
       dono), sem confundir com o "eu" da palavra procurada ("eu te amo")
 

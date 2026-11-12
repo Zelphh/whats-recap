@@ -121,6 +121,20 @@ impl Client {
     }
 }
 
+impl Client {
+    /// Processa cada prompt de sistema (o servidor põe cada um num slot livre) e descarta a saída.
+    /// A próxima chamada com o mesmo prompt de sistema reaproveita o cache e só processa a pergunta.
+    /// Erros são ignorados: aquecer é só otimização.
+    ///
+    /// Em sequência: no Qwen3.5 9B (RX 7600, Vulkan), os dois prompts do chat levam ~2 s um depois
+    /// do outro e ~9 s em paralelo.
+    pub fn warm(&self, prompts: &[(String, Value)]) {
+        for (system, schema) in prompts {
+            let _ = self.chat::<Value>(system, ".", schema, 1);
+        }
+    }
+}
+
 fn shorten(s: &str) -> String {
     const MAX: usize = 500;
     match s.char_indices().nth(MAX) {

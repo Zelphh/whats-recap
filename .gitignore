@@ -3,6 +3,9 @@
 /dist
 *.tsbuildinfo
 /src-tauri/gen
+# llama-server do instalador (scripts/setup-llama.ps1); só o LEIA-ME vai para o git.
+/src-tauri/llama/*
+!/src-tauri/llama/LEIA-ME.md
 *.db
 *.db-wal
 *.db-shm

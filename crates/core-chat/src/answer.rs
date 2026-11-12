@@ -179,6 +179,80 @@ fn sum_hours(by_author: &[[u64; 24]], hours: Option<HourRange>) -> Vec<u64> {
     by_author.iter().map(|h| h[a..=b].iter().sum()).collect()
 }
 
+/// Média com uma casa decimal quando é pequena ("0,5"), inteira quando não é ("1.234").
+fn fmt_avg(x: f64) -> String {
+    if x >= 10.0 {
+        fmt_int(x.round() as u64)
+    } else {
+        format!("{x:.1}").replace('.', ",")
+    }
+}
+
+/// "de noite (18h–23h)".
+fn part_phrase((a, b, name): HourRange) -> String {
+    format!("de {name} ({a}h–{b}h)")
+}
+
+/// "de noite ou de dia?": a parte com mais (ou menos) mensagens, contra as outras. As faixas têm
+/// tamanhos diferentes (a noite tem 6 horas; o dia, 12), então a média por hora vem junto.
+fn compare_parts(by_author: &[[u64; 24]], parts: &[HourRange], most: bool, who: Option<&str>, range: &str) -> String {
+    let totals: Vec<u64> = parts
+        .iter()
+        .map(|&p| sum_hours(by_author, Some(p)).iter().sum())
+        .collect();
+    let mut order: Vec<usize> = (0..parts.len()).collect();
+    // Estável: no empate, vale a ordem da pergunta.
+    order.sort_by(|&a, &b| {
+        if most {
+            totals[b].cmp(&totals[a])
+        } else {
+            totals[a].cmp(&totals[b])
+        }
+    });
+    let (first, rest) = (order[0], &order[1..]);
+    let more = if most { "mais" } else { "menos" };
+    let subject = match who {
+        Some(a) => format!("{a} manda {more} mensagens"),
+        None => format!("Vocês conversam {more}"),
+    };
+    let text = if totals.iter().all(|&t| t == 0) {
+        format!(
+            "Não há mensagens{}{range} {}.",
+            who.map(|a| format!(" de {a}")).unwrap_or_default(),
+            parts.iter().map(|&p| part_phrase(p)).collect::<Vec<_>>().join(" nem ")
+        )
+    } else if rest.iter().all(|&i| totals[i] == totals[first]) {
+        format!(
+            "Empate{range}: {} em cada parte do dia ({}).",
+            plural(totals[first], "mensagem", "mensagens"),
+            parts.iter().map(|&p| part_phrase(p)).collect::<Vec<_>>().join(", ")
+        )
+    } else {
+        let others: Vec<String> = rest
+            .iter()
+            .map(|&i| format!("{} {}", fmt_int(totals[i]), part_phrase(parts[i])))
+            .collect();
+        format!(
+            "{subject} {}{range}: {}, contra {}.",
+            part_phrase(parts[first]),
+            plural(totals[first], "mensagem", "mensagens"),
+            others.join(" e ")
+        )
+    };
+    let spans: Vec<u64> = parts.iter().map(|&(a, b, _)| u64::from(b - a) + 1).collect();
+    if spans.iter().any(|&s| s != spans[0]) && totals.iter().any(|&t| t > 0) {
+        let per_hour: Vec<String> = parts
+            .iter()
+            .zip(&totals)
+            .zip(&spans)
+            .map(|((&(_, _, name), &t), &s)| format!("{} de {name}", fmt_avg(t as f64 / s as f64)))
+            .collect();
+        format!("{text} Por hora, a média é de {}.", per_hour.join(" e "))
+    } else {
+        text
+    }
+}
+
 fn capitalize(s: &str) -> String {
     let mut c = s.chars();
     c.next()
@@ -301,6 +375,9 @@ pub fn compose(call: &ToolCall, result: &ToolResult, intent: &Intent, authors: &
                 }
             };
             (capitalize(&text), vec![])
+        }
+        (ToolResult::MessagesByHour { by_author }, Intent::CompareParts { most, parts }) => {
+            (compare_parts(by_author, parts, *most, who, &range), vec![])
         }
         (ToolResult::MessagesByHour { by_author }, _) => {
             let all: Vec<u64> = (0..24).map(|h| by_author.iter().map(|a| a[h]).sum()).collect();

@@ -6,11 +6,14 @@
 use core_stats::{STATS_VERSION, Stats, StatsSettings, compute_from_db};
 use core_storage::{Db, ImportOptions, ImportProgress, ImportSummary, MessageRow, import_new};
 use serde::Serialize;
-use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
+
+mod llm;
+
+use llm::LlmState;
 
 type CmdResult<T> = Result<T, String>;
 
@@ -296,91 +299,123 @@ async fn locate_date(app: AppHandle, id: String, date: String) -> CmdResult<Opti
     open(&app, &id)?.first_id_at_or_after(ts).map_err(err)
 }
 
-/// Modelo de linguagem do chat. O `llama-server` só sobe na primeira pergunta que as regras fixas
-/// não entendem (~9 s e ~5,5 GB de VRAM com o Qwen3.5 9B) e fica de pé até o app fechar.
-#[derive(Default)]
-struct LlmState {
-    server: Mutex<Option<core_llm::Server>>,
-}
-
-/// O `llama-server` e o modelo: variáveis de ambiente ou, em desenvolvimento, os arquivos do
-/// `whatsrecap-evals` ao lado deste repositório. Sem eles, o chat usa só as regras fixas.
-/// (Baixar o modelo pelo app é a próxima etapa; ver `docs/TODO.md`.)
-fn llm_files() -> Option<(PathBuf, PathBuf)> {
-    let env = |var: &str| std::env::var_os(var).map(PathBuf::from);
-    let dev =
-        |rel: &str| cfg!(debug_assertions).then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel));
-    let server = if cfg!(windows) {
-        "llama-server.exe"
-    } else {
-        "llama-server"
-    };
-    let bin = env("WHATSRECAP_LLAMA_SERVER")
-        .or_else(|| dev(&format!("whatsrecap-evals/vendor/llama.cpp/current/{server}")))?;
-    let model = env("WHATSRECAP_MODEL").or_else(|| dev("whatsrecap-evals/models/Qwen3.5-9B-IQ4_XS.gguf"))?;
-    (bin.exists() && model.exists()).then_some((bin, model))
-}
-
-/// Ponte entre o chat e o `core-llm`.
-struct AppLlm<'a> {
-    state: &'a LlmState,
-    bin: PathBuf,
-    model: PathBuf,
-    log: Option<PathBuf>,
-}
-
-impl core_chat::Llm for AppLlm<'_> {
-    fn complete(&self, system: &str, user: &str, schema: &Value, max_tokens: u32) -> Result<Value, String> {
-        let client = {
-            let mut server = self.state.server.lock().map_err(err)?;
-            if server.is_none() {
-                let mut cfg = core_llm::ServerConfig::new(&self.bin, &self.model);
-                cfg.log = self.log.clone();
-                *server = Some(core_llm::Server::start(&cfg).map_err(err)?);
-            }
-            server.as_ref().map(|s| s.client().clone()).unwrap()
-        };
-        match client.chat::<Value>(system, user, schema, max_tokens) {
-            Ok(out) => Ok(out.value),
-            Err(e) => {
-                // Servidor fora do ar (caiu ou foi encerrado): sobe de novo na próxima pergunta.
-                if matches!(e, core_llm::LlmError::Http(_)) {
-                    self.state.server.lock().map_err(err)?.take();
-                }
-                Err(err(e))
-            }
-        }
-    }
-}
-
 /// Pergunta ao chat (tipo 1: contagens). A resposta traz o texto, a ferramenta usada e as citações.
 #[tauri::command]
 async fn chat_ask(app: AppHandle, id: String, question: String) -> CmdResult<core_chat::ChatAnswer> {
     blocking(move || {
         let db = open(&app, &id)?;
-        let llm = llm_files().map(|(bin, model)| AppLlm {
-            state: app.state::<LlmState>().inner(),
-            bin,
-            model,
-            log: app.path().app_data_dir().ok().map(|d| d.join("llama-server.log")),
+        let state = app.state::<LlmState>();
+        let llm = LlmState::available(&app).then(|| llm::AppLlm {
+            state: state.inner(),
+            app: app.clone(),
         });
         core_chat::ask(&db, &question, llm.as_ref().map(|l| l as &dyn core_chat::Llm)).map_err(err)
     })
     .await
 }
 
-/// Situação do modelo: `"off"` (arquivos ausentes, só regras fixas), `"idle"` (ainda não carregado;
-/// a próxima pergunta livre leva ~9 s a mais) ou `"ready"`.
+/// Situação do modelo para o chat: `"off"` (sem modelo, só regras fixas), `"idle"` (ainda não
+/// carregado), `"loading"` ou `"ready"`.
 #[tauri::command]
-fn llm_status(state: tauri::State<LlmState>) -> &'static str {
-    if llm_files().is_none() {
-        return "off";
-    }
-    // Ocupado = carregando ou respondendo outra pergunta.
-    match state.server.try_lock() {
-        Ok(server) if server.is_some() => "ready",
-        _ => "idle",
-    }
+fn llm_status(app: AppHandle) -> &'static str {
+    app.state::<LlmState>().status(&app)
+}
+
+/// Modelos, GPU e o que está carregado, para as configurações (lista as GPUs: ~1 s).
+#[tauri::command]
+async fn llm_info(app: AppHandle) -> CmdResult<llm::LlmInfo> {
+    blocking(move || Ok(app.state::<LlmState>().info(&app))).await
+}
+
+/// Sobe o modelo e aquece os prompts da conversa (chamado ao abrir o chat), para que a primeira
+/// pergunta livre não espere a carga (4–10 s) nem o processamento dos prompts (~2 s).
+#[tauri::command]
+async fn llm_prepare(app: AppHandle, id: String) -> CmdResult<()> {
+    blocking(move || {
+        let db = open(&app, &id)?;
+        app.state::<LlmState>()
+            .prepare(&app, &id, || core_chat::llm_prompts(&db).map_err(err))
+    })
+    .await
+}
+
+/// Descarrega o modelo (libera a VRAM).
+#[tauri::command]
+async fn llm_stop(app: AppHandle) -> CmdResult<()> {
+    blocking(move || {
+        app.state::<LlmState>().stop();
+        Ok(())
+    })
+    .await
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DownloadEvent {
+    model_id: &'static str,
+    phase: core_llm::DownloadPhase,
+    done: u64,
+    total: u64,
+}
+
+/// Baixa um modelo do catálogo, com eventos `llm-download`. Retoma um download interrompido.
+#[tauri::command]
+async fn llm_download(app: AppHandle, model_id: String) -> CmdResult<()> {
+    let spec = core_llm::model(&model_id).ok_or_else(|| format!("modelo desconhecido: {model_id}"))?;
+    let cancel = app.state::<LlmState>().begin_download(spec.id)?;
+    let app2 = app.clone();
+    let result = blocking(move || {
+        let dest = llm::download_dir(&app2)?.join(spec.file);
+        let mut last = std::time::Instant::now();
+        let source = core_llm::DownloadSpec {
+            url: spec.url,
+            size: spec.size,
+            sha256: spec.sha256,
+        };
+        core_llm::download(&source, &dest, &cancel, &mut |phase, done, total| {
+            if done == total || last.elapsed().as_millis() >= 200 {
+                last = std::time::Instant::now();
+                let _ = app2.emit(
+                    "llm-download",
+                    DownloadEvent {
+                        model_id: spec.id,
+                        phase,
+                        done,
+                        total,
+                    },
+                );
+            }
+        })
+        .map_err(err)
+    })
+    .await;
+    app.state::<LlmState>().end_download();
+    result
+}
+
+#[tauri::command]
+fn llm_cancel_download(state: tauri::State<LlmState>) {
+    state.cancel_download();
+}
+
+/// Apaga um modelo baixado pelo app (e um download interrompido). Se for o carregado, descarrega antes.
+#[tauri::command]
+async fn llm_delete_model(app: AppHandle, model_id: String) -> CmdResult<()> {
+    let spec = core_llm::model(&model_id).ok_or_else(|| format!("modelo desconhecido: {model_id}"))?;
+    blocking(move || {
+        let state = app.state::<LlmState>();
+        if state.active_model() == Some(spec.id) {
+            state.stop();
+        }
+        let dest = llm::download_dir(&app)?.join(spec.file);
+        for path in [core_llm::partial_path(&dest), dest] {
+            if path.exists() {
+                std::fs::remove_file(path).map_err(err)?;
+            }
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Perguntas de exemplo com os nomes da conversa.
@@ -405,6 +440,12 @@ pub fn run() {
             get_chat_me,
             set_chat_me,
             llm_status,
+            llm_info,
+            llm_prepare,
+            llm_stop,
+            llm_download,
+            llm_cancel_download,
+            llm_delete_model,
             delete_conversation,
             get_stats,
             get_settings,
@@ -420,10 +461,8 @@ pub fn run() {
         .expect("erro ao iniciar o app")
         .run(|app, event| {
             // Encerra o llama-server junto com o app (o Drop do Server mata o processo).
-            if let tauri::RunEvent::Exit = event
-                && let Ok(mut server) = app.state::<LlmState>().server.lock()
-            {
-                server.take();
+            if let tauri::RunEvent::Exit = event {
+                app.state::<LlmState>().stop();
             }
         });
 }

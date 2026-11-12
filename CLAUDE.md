@@ -27,6 +27,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 O CI roda fmt, clippy com `-D warnings` e testes; warnings de clippy quebram o build. Para compilar
 `src-tauri` sem o frontend buildado, basta existir `dist/index.html` (o CI cria um placeholder).
 
+O `llama-server` vai no instalador como recurso (`src-tauri/llama/`, fora do git): prepare com
+`scripts/setup-llama.ps1` antes de `pnpm tauri build`. Em debug, sem a pasta, o app usa o
+`llama-server` e os modelos do `../whatsrecap-evals`.
+
 Ferramentas de linha de comando:
 
 ```sh
@@ -64,11 +68,14 @@ Pipeline em crates do workspace (`crates/*` + `src-tauri`), cada um dependendo d
    números). `llm.rs` guarda os schemas/prompts para quando o LLM entrar nos casos não resolvidos.
 6. **core-llm** — acesso ao modelo local: sobe o `llama-server` (llama.cpp) como processo filho e
    chama `/v1/chat/completions` com saída restrita por JSON schema. Genérico (não conhece o chat).
+   Também o catálogo de modelos com flags por modelo (`models.rs`), a escolha GPU/CPU pela VRAM
+   livre (`plan`, `list_devices`) e o download com retomada e SHA-256.
    Testes usam um servidor HTTP falso; o que carrega o modelo de verdade é `#[ignore]` e o example `ferramenta`.
 7. **synth** — gerador de conversas sintéticas (com mídia real WebP/Ogg) e o anonimizador de fixtures.
 
 **src-tauri/src/lib.rs** — todos os `#[tauri::command]`. Trabalho pesado roda em `blocking(...)`;
 a importação é um job em background com eventos de progresso e cancelamento (`ImportState`).
+`llm.rs` guarda o estado do modelo (`LlmState`): caminhos, servidor no ar, aquecimento e download.
 
 **src/** — React + Vite + TS, sem roteador: `App.tsx` alterna as views (`home`, `dashboard`,
 `viewer`, `settings`, `chat`) por estado. Toda chamada ao backend passa por `src/api.ts`; os tipos

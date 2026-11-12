@@ -16,9 +16,15 @@
 //! ```
 
 mod client;
+mod devices;
+mod download;
+mod models;
 mod server;
 
 pub use client::{Client, Completion, Timings};
+pub use devices::{Device, list_devices};
+pub use download::{DownloadPhase, DownloadSpec, download, partial_path};
+pub use models::{Backend, CPU_ARGS, Choice, GPU_ARGS, MODELS, ModelSpec, QWEN35_4B, QWEN35_9B, model, plan};
 pub use server::{RECOMMENDED_ARGS, Server, ServerConfig};
 
 use std::path::PathBuf;
@@ -40,6 +46,10 @@ pub enum LlmError {
     Truncated(u32),
     #[error("resposta fora do formato esperado ({error}): {content}")]
     InvalidOutput { error: String, content: String },
+    #[error("download cancelado")]
+    Cancelled,
+    #[error("o arquivo baixado não confere (SHA-256 {got}, esperado {expected}); baixe de novo")]
+    Checksum { expected: String, got: String },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

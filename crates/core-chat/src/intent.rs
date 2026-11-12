@@ -24,6 +24,11 @@ pub enum Intent {
     TotalMessages {
         hours: Option<HourRange>,
     },
+    /// "a gente conversa mais de noite ou de dia?": compara as partes do dia citadas.
+    CompareParts {
+        most: bool,
+        parts: Vec<HourRange>,
+    },
     PeakHour,
     TopPeriod {
         most: bool,
@@ -41,6 +46,9 @@ pub const PARTS_OF_DAY: [HourRange; 4] = [
     (12, 17, "tarde"),
     (18, 23, "noite"),
 ];
+
+/// "De dia" (manhã e tarde), o contrário de "de noite".
+pub const DAYTIME: HourRange = (6, 17, "dia");
 
 const MONTHS: [&str; 12] = [
     "janeiro",
@@ -72,7 +80,7 @@ static AFTER_VERB_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 static TRAILING_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"\s+(?:(?:pra|para|pro|com|a|ao)\s+(?:mim|ele|ela|voce|vc|a gente|nos|o \w+|a \w+)|na conversa|no chat|no whatsapp|nessa conversa|nesta conversa|ate hoje|no total|comigo|contigo|(?:em|no ano de|durante|de) \d{4}|em \w+ de \d{4}|entre \d{4} e \d{4}|de (?:madrugada|manha|tarde|noite)|(?:na|pela|a) (?:madrugada|manha|tarde|noite))$",
+        r"\s+(?:(?:pra|para|pro|com|a|ao)\s+(?:mim|ele|ela|voce|vc|a gente|nos|o \w+|a \w+)|na conversa|no chat|no whatsapp|nessa conversa|nesta conversa|ate hoje|no total|comigo|contigo|(?:em|no ano de|durante|de) \d{4}|em \w+ de \d{4}|entre \d{4} e \d{4}|de (?:madrugada|manha|tarde|noite|dia)|(?:na|pela|a) (?:madrugada|manha|tarde|noite))$",
     )
     .unwrap()
 });
@@ -130,6 +138,9 @@ static RELATIVE_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static WEEKEND_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(fim de semana|fins de semana|dias? (util|uteis))\b").unwrap());
+// "de dia", "durante o dia", "pelo dia"; não "dia da semana" nem "de dia 15".
+static DAYTIME_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:de|durante o|pelo) dia\b(?: (?:da|do|de|\d)\w*)?").unwrap());
 static WHO_MOST_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bquem\b.*\b(manda|envia|escreve|fala|conversa|digita|puxa|mensag)\w*").unwrap());
 
@@ -172,12 +183,40 @@ pub fn date_range(q: &str) -> (Option<NaiveDate>, Option<NaiveDate>) {
     (None, None)
 }
 
+/// Partes do dia citadas na pergunta, na ordem em que aparecem, sem repetir.
+pub fn parts_of_day(q: &str) -> Vec<HourRange> {
+    let mut found: Vec<(usize, HourRange)> = WORD_RE
+        .find_iter(q)
+        .filter_map(|m| {
+            let part = PARTS_OF_DAY.iter().find(|(_, _, name)| fold(name) == m.as_str())?;
+            Some((m.start(), *part))
+        })
+        .collect();
+    // "de dia" só vale sozinho: "de dia 15", "dia da semana" e "dia do mês" são outra coisa.
+    found.extend(
+        DAYTIME_RE
+            .find_iter(q)
+            .filter(|m| m.as_str().ends_with(" dia"))
+            .map(|m| (m.start(), DAYTIME)),
+    );
+    found.sort_by_key(|(pos, _)| *pos);
+    let mut parts: Vec<HourRange> = Vec::new();
+    for (_, p) in found {
+        if !parts.contains(&p) {
+            parts.push(p);
+        }
+    }
+    parts
+}
+
 fn part_of_day(q: &str) -> Option<HourRange> {
-    let words: Vec<&str> = WORD_RE.find_iter(q).map(|m| m.as_str()).collect();
-    PARTS_OF_DAY.iter().copied().find(|(_, _, name)| {
-        let folded = fold(name);
-        words.iter().any(|w| *w == folded)
-    })
+    parts_of_day(q).first().copied()
+}
+
+/// Duas ou mais partes do dia ligadas por "ou": "de noite ou de dia", "manhã ou tarde".
+fn compared_parts(q: &str) -> Option<Vec<HourRange>> {
+    let parts = parts_of_day(q);
+    (parts.len() >= 2 && WORD_RE.find_iter(q).any(|m| m.as_str() == "ou")).then_some(parts)
 }
 
 /// Hora com a parte do dia: "9 da noite" → 21, "2 da tarde" → 14 (meio-dia e antes ficam iguais).
@@ -393,6 +432,14 @@ pub fn interpret_as(question: &str, authors: &[String], me: Option<&str>) -> Opt
             Intent::TopPeriod { most },
         ));
     }
+    if !has("quem")
+        && let Some(parts) = compared_parts(&q)
+    {
+        return Some((
+            ToolCall::MessagesByHour { author, from, to },
+            Intent::CompareParts { most, parts },
+        ));
+    }
     let hours = part_of_day(&q);
     if PEAK_HOUR_RE.is_match(&q) && hours.is_none() {
         return Some((ToolCall::MessagesByHour { author, from, to }, Intent::PeakHour));
@@ -427,7 +474,10 @@ pub fn intent_for(call: &ToolCall, question: &str) -> Intent {
         ToolCall::ListMessages(_) => Intent::ListMessages,
         ToolCall::MessagesByHour { author, .. } => {
             let hours = part_of_day(&q);
-            if PEAK_HOUR_RE.is_match(&q) && hours.is_none() {
+            let compared = compared_parts(&q).filter(|_| author.is_some() || !WHO_MOST_RE.is_match(&q));
+            if let Some(parts) = compared {
+                Intent::CompareParts { most, parts }
+            } else if PEAK_HOUR_RE.is_match(&q) && hours.is_none() {
                 Intent::PeakHour
             } else if author.is_none() && WHO_MOST_RE.is_match(&q) {
                 Intent::WhoMost { most, hours }
