@@ -119,6 +119,14 @@ static LIST_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b(?:quais|que|mostr\w*|list\w*|exib\w*|ver|veja)\b (?:foram |sao |eram )?(?:todas )?(?:as )?(?:mensagens|msgs?)\b")
         .unwrap()
 });
+// "o que ela mandou/escreveu/disse": o que foi enviado, não o assunto.
+static SENT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bo que\b.*\b(?:mand|envi|escrev|fal|diss|digit)(?:ou|ei|amos|aram|ava|avam|eu|i|emos|eram|e)\b")
+        .unwrap()
+});
+// "mostra o que", "me mostra o que", "lista pra mim o que".
+static SHOW_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:mostr\w*|list\w*|exib\w*|ver|veja)\b(?: \w+){0,2} o que\b").unwrap());
 static WORD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z0-9]+").unwrap());
 
 static RESPONSE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -141,8 +149,10 @@ static WEEKEND_RE: LazyLock<Regex> =
 // "de dia", "durante o dia", "pelo dia"; não "dia da semana" nem "de dia 15".
 static DAYTIME_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(?:de|durante o|pelo) dia\b(?: (?:da|do|de|\d)\w*)?").unwrap());
-static WHO_MOST_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bquem\b.*\b(manda|envia|escreve|fala|conversa|digita|puxa|mensag)\w*").unwrap());
+static WHO_MOST_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bquem\b.*\b(manda|envia|escreve|fala|conversa|digita|puxa|mensag|tagarel|falador|faladeir|papud)\w*")
+        .unwrap()
+});
 
 fn date(y: i32, m: u32, d: u32) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(y, m, d)
@@ -329,9 +339,24 @@ fn mentioned_author(q: &str, authors: &[String], me: Option<&str>, exclude: Opti
 }
 
 /// "o que ela mandou das 7h às 8h?", "o que a gente falou de madrugada?": com horário, "o que" pede
-/// as mensagens daquele horário, não uma resposta sobre o conteúdo.
+/// as mensagens daquele horário, não uma resposta sobre o conteúdo. Com data ou período ("mostra o
+/// que a Ana mandou no Natal do ano passado"), também, se o verbo for de envio e não houver assunto
+/// ("o que ela disse sobre o emprego" continua sendo pergunta de conteúdo).
 pub fn is_timed_what(q: &str) -> bool {
-    q.contains("o que") && (hour_range(q).is_some() || part_of_day(q).is_some())
+    if !q.contains("o que") {
+        return false;
+    }
+    if hour_range(q).is_some() || part_of_day(q).is_some() {
+        return true;
+    }
+    SENT_RE.is_match(q)
+        && !q.contains("sobre")
+        && (date_range(q).0.is_some() || RELATIVE_RE.is_match(q) || SHOW_RE.is_match(q))
+}
+
+/// Período relativo ("ano passado", "no Natal"), que as regras fixas não convertem em datas.
+pub fn has_relative_period(q: &str) -> bool {
+    RELATIVE_RE.is_match(q)
 }
 
 /// Palavra entre aspas, se houver (na lista de mensagens, só ela filtra por palavra).
@@ -806,6 +831,58 @@ mod tests {
         }
         // Com data explícita, as regras continuam respondendo.
         assert!(interpret("quantas vezes ela falou amor no verão de 2024?", &authors()).is_some());
+    }
+
+    #[test]
+    fn talkative() {
+        let (c, i) = interpret("quem é mais tagarela de nós dois?", &authors()).unwrap();
+        assert_eq!(
+            c,
+            ToolCall::MessagesByHour {
+                author: None,
+                from: None,
+                to: None
+            }
+        );
+        assert_eq!(
+            i,
+            Intent::WhoMost {
+                most: true,
+                hours: None
+            }
+        );
+        assert!(matches!(
+            interpret("quem é menos falador em 2024?", &authors()).unwrap().1,
+            Intent::WhoMost { most: false, .. }
+        ));
+    }
+
+    #[test]
+    fn what_was_sent_on_a_date() {
+        // Data explícita: lista pelas regras fixas.
+        let (c, i) = interpret("mostra o que a Ana mandou em 25/12/2024", &authors()).unwrap();
+        assert_eq!(i, Intent::ListMessages);
+        assert_eq!(
+            c,
+            ToolCall::ListMessages(ListFilter {
+                author: Some("Ana Souza".into()),
+                from: d(2024, 12, 25),
+                to: d(2024, 12, 25),
+                ..Default::default()
+            })
+        );
+        // Período relativo: é lista (o roteador manda como contagem), mas as datas ficam com o LLM.
+        let q = fold("mostra o que a Ana mandou no natal do ano passado");
+        assert!(is_timed_what(&q));
+        assert!(interpret("mostra o que a Ana mandou no natal do ano passado", &authors()).is_none());
+        // Assunto ou verbo que não é de envio: pergunta de conteúdo.
+        for q in [
+            "o que ela disse sobre o emprego no ano passado?",
+            "o que a gente decidiu no natal?",
+            "o que ela acha de mim?",
+        ] {
+            assert!(!is_timed_what(&fold(q)), "{q}");
+        }
     }
 
     #[test]

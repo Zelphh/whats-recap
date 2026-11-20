@@ -6,7 +6,7 @@ WhatsRecap: app desktop (Tauri v2 + React 19) que analisa exports de conversas d
 **duas** pessoas, 100% local. Código, comentários, docs, UI e mensagens de commit são em **pt-BR**.
 
 Princípio central: **código conta, LLM classifica.** Toda contagem/agregação é determinística em Rust;
-o LLM (fases 5–9, ainda não implementadas) só classifica trechos ou interpreta perguntas.
+o LLM só classifica trechos, interpreta perguntas ou responde sobre o conteúdo a partir de trechos citados.
 
 Pendências e ordem das próximas fases: `docs/TODO.md`. Contrato de dados para a interface: `docs/design-brief.md`.
 
@@ -65,17 +65,22 @@ Pipeline em crates do workspace (`crates/*` + `src-tauri`), cada um dependendo d
    banco) e duração de áudios lida do container Ogg sem decodificar. Só no modo `.zip`.
 5. **core-chat** — chat tipo 1 (perguntas quantitativas): `router::route` → `intent::interpret`
    (heurística) → `tools::Conversation::execute` (consulta SQL) → `answer::compose` (template com os
-   números). `llm.rs` guarda os schemas/prompts para quando o LLM entrar nos casos não resolvidos.
+   números). `llm.rs` guarda os schemas/prompts do LLM para os casos não resolvidos. Chat tipo 2
+   (conteúdo) em `rag.rs`: trechos na tabela `chunks` com vetores do embedder, busca por cosseno e
+   resposta do LLM com citações conferidas; `ask_with` recebe o `Llm` e o `rag::Embedder`.
 6. **core-llm** — acesso ao modelo local: sobe o `llama-server` (llama.cpp) como processo filho e
    chama `/v1/chat/completions` com saída restrita por JSON schema. Genérico (não conhece o chat).
    Também o catálogo de modelos com flags por modelo (`models.rs`), a escolha GPU/CPU pela VRAM
    livre (`plan`, `list_devices`) e o download com retomada e SHA-256.
-   Testes usam um servidor HTTP falso; o que carrega o modelo de verdade é `#[ignore]` e o example `ferramenta`.
+   Também o embedder (`E5_SMALL`, `Client::embed`) das perguntas sobre o conteúdo.
+   Testes usam um servidor HTTP falso; o que carrega o modelo de verdade é `#[ignore]` e os examples
+   `ferramenta`, `chat` e `conteudo` (este indexa um `.db` com o e5 na CPU e responde na GPU).
 7. **synth** — gerador de conversas sintéticas (com mídia real WebP/Ogg) e o anonimizador de fixtures.
 
 **src-tauri/src/lib.rs** — todos os `#[tauri::command]`. Trabalho pesado roda em `blocking(...)`;
 a importação é um job em background com eventos de progresso e cancelamento (`ImportState`).
-`llm.rs` guarda o estado do modelo (`LlmState`): caminhos, servidor no ar, aquecimento e download.
+`llm.rs` guarda o estado do modelo (`LlmState`): caminhos, servidor no ar, aquecimento e download,
+e o servidor do embedder (CPU). A indexação da conversa (`rag_index`) é um job com eventos `rag-progress`.
 
 **src/** — React + Vite + TS, sem roteador: `App.tsx` alterna as views (`home`, `dashboard`,
 `viewer`, `settings`, `chat`) por estado. Toda chamada ao backend passa por `src/api.ts`; os tipos

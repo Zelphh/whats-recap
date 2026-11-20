@@ -75,12 +75,12 @@ compila o app e passa em `cargo test --workspace`.
         (9B: 6 GB livres; 4B: 3,5 GB), o próximo se a carga falhar e, por último, o menor na CPU
         (`-ngl 0 -c 8192 -dev none`)
   - [ ] Testar o instalador numa máquina sem o Visual C++ Redistributable
-  - [ ] **A VRAM livre do `--list-devices` não enxerga outros processos.** Com o 4B carregado por
-        outro processo, continuou em 7.362 MiB; com o 9B, caiu só ~1,7 GB. A escolha GPU/CPU por
-        memória livre não protege de um jogo ocupando a placa (o fallback por falha na carga
-        continua valendo, mas o Vulkan no Windows pode transbordar para a RAM em vez de falhar).
-        Ler a memória pelo DXGI (`QueryVideoMemoryInfo`) ou pelos contadores de GPU (`typeperf`,
-        como o evals faz)
+  - [x] **A VRAM livre do `--list-devices` não enxergava outros processos** (com o 4B carregado
+        por outro processo, continuava em 7.362 MiB). No Windows, `list_devices` desconta o uso
+        dedicado de todos os processos pelo contador "GPU Adapter Memory" (PDH, nome em inglês, vale
+        em qualquer idioma), ligado à placa pelo LUID do DXGI. Na RX 7600 só com o desktop: 6.234
+        MiB livres em vez de 7.362 (o 9B ainda cabe, com ~230 MiB de folga sobre os 6.000).
+        `cargo run -p core-llm --example dispositivos` mostra o que o app vê
 - [x] Download do modelo pelo app (Hugging Face, 9B de 4,8 GiB ou 4B de 2,6 GiB; progresso,
       pausa e retomada por `Range`, checagem de tamanho e SHA-256 antes de renomear o `.partial`)
 - [x] Tela de status do LLM nas configurações (o que está carregado e onde, GPU e VRAM livre,
@@ -129,10 +129,17 @@ compila o app e passa em `cargo test --workspace`.
         cinco novos (t51–t55) passam; erra t04, t26, t28 (já conhecidos) e t07 ("quem manda mais
         mensagem de madrugada?" ganhou autor; no app, as regras fixas respondem antes). p50 de
         0,99 s (era 0,62 s; o prompt cresceu)
-  - [ ] Achados no teste do fluxo: "quem é mais tagarela de nós dois?" vira `messages_by_period`
-        por dia (devia comparar quem manda mais); "mostra o que a Ana mandou no natal do ano
-        passado" cai no roteador como conteúdo (`retrieval`) em vez de `list_messages`; o 4B ignora
-        "no ano passado" em `response_time`
+  - [x] Achados no teste do fluxo:
+    - [x] "quem é mais tagarela de nós dois?" → regra fixa de quem manda mais (tagarela, falador,
+          faladeira, papudo) e citado no prompt em `messages_by_hour`
+    - [x] "mostra o que a Ana mandou no natal do ano passado" → lista: "o que" + verbo de envio +
+          data, período ou "mostra", sem "sobre", vai como contagem; com período relativo, o LLM
+          preenche as datas (o prompt cita o Natal e o exemplo "o que ele mandou no Natal")
+    - [x] O 4B ignorava "no ano passado" em `response_time`: se o modelo devolve sem datas e a
+          pergunta tem um único período relativo que o código calcula (este ano, ano passado,
+          este mês, mês passado, últimos 12 meses), as datas entram (`llm::relative_range`)
+    - [ ] Medir B de novo no evals com o prompt alterado (tagarela, Natal) e checar as três
+          perguntas com o 9B e o 4B
 - [x] "eu"/"eu disse" na pergunta apontar para o autor "Você" (export do iOS/Android do próprio
       dono), sem confundir com o "eu" da palavra procurada ("eu te amo")
 
@@ -153,12 +160,31 @@ compila o app e passa em `cargo test --workspace`.
 
 ## 6. Fase 9 — Chat tipo 2 / RAG (feature 22)
 
-- [ ] `sqlite-vec` no `core-storage`; preencher a tabela `chunks`
-- [ ] Indexação com embeddings na CPU (`e5-small-q8`: ~20 min para ~190 mil mensagens)
-- [ ] Busca: hoje a só-vetorial vence a híbrida (MRR 0,84 × 0,70); só adotar RRF se o FTS com
-      `AND`/frases ou o `bge-m3` mudarem isso
-- [ ] Resposta com citações `#id` que viram links no visualizador; recusa quando não há resposta
+- [x] Embedder `e5-small-q8` no catálogo (`core_llm::E5_SMALL`, 126 MiB, baixado pelo app com
+      SHA-256) num segundo `llama-server` na CPU (`--embedding --pooling mean`), que sobe na primeira
+      indexação ou pergunta; `Client::embed` devolve vetores normalizados
+- [x] Tabela `chunks` preenchida (`core_chat::rag`): janelas de até 12 mensagens / 1.000
+      caracteres, quebradas em pausas de 1 h, sobreposição de 2; mensagens de pessoas com texto ou
+      legenda. Vetores `f32` no BLOB `embedding`; `NULL` = falta (indexação retomável, em lotes de
+      32). Índice com versão e embedder em `meta.rag_index`: outro embedder ou versão refaz
+- [x] Busca só vetorial (cosseno por força bruta sobre os BLOBs, exata; é o que o `sqlite-vec`
+      faria, sem a dependência em C). RRF só se o FTS com `AND`/frases ou o `bge-m3` mudarem o
+      resultado do evals
+- [x] Resposta: top-5 trechos (unidos quando se sobrepõem, até ~7 mil caracteres) no formato do
+      evals, prompt e schema do evals (`llm::rag_prompt`); citações conferidas contra o contexto,
+      e sem nenhuma válida a resposta vira recusa. Links para o visualizador nas citações
+- [x] Interface: cartão no chat para indexar, pausar e continuar (progresso e tempo restante);
+      linha do modelo de busca em Configurações; o servidor de chat ganhou um 3º slot (o prompt do
+      RAG muda a cada pergunta e não tira do cache o roteador e a seleção de ferramenta)
+- [x] Roteador: "quanto custou/pagou/ficou" e "quantos anos" são conteúdo, não contagem
+- [ ] Testar com os modelos de verdade: `cargo run --release -p core-llm --example conteudo --
+      conversa.db "pergunta"` (indexa na CPU e responde na GPU). Medir o tempo de indexação de
+      ~190 mil mensagens e as perguntas do `rag.json` do evals injetadas numa conversa sintética
+- [ ] O texto dos trechos para o embedder mudou em relação ao evals (data uma vez e
+      "Pessoa: mensagem", sem id e data por linha, para caber nos 512 tokens do e5 e indexar mais
+      rápido): medir o MRR com esse formato no evals
 - [ ] Calibrar top-k e o tamanho das janelas
+- [ ] Perguntas de acompanhamento ("e depois?") não têm memória: cada pergunta busca sozinha
 
 ## Fora do LLM
 

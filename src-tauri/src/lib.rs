@@ -7,8 +7,8 @@ use core_stats::{STATS_VERSION, Stats, StatsSettings, compute_from_db};
 use core_storage::{Db, ImportOptions, ImportProgress, ImportSummary, MessageRow, import_new};
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 mod llm;
@@ -299,7 +299,8 @@ async fn locate_date(app: AppHandle, id: String, date: String) -> CmdResult<Opti
     open(&app, &id)?.first_id_at_or_after(ts).map_err(err)
 }
 
-/// Pergunta ao chat (tipo 1: contagens). A resposta traz o texto, a ferramenta usada e as citações.
+/// Pergunta ao chat: contagens (tipo 1) ou conteúdo (tipo 2, com a conversa indexada). A resposta
+/// traz o texto, a ferramenta usada e as citações.
 #[tauri::command]
 async fn chat_ask(app: AppHandle, id: String, question: String) -> CmdResult<core_chat::ChatAnswer> {
     blocking(move || {
@@ -309,9 +310,126 @@ async fn chat_ask(app: AppHandle, id: String, question: String) -> CmdResult<cor
             state: state.inner(),
             app: app.clone(),
         });
-        core_chat::ask(&db, &question, llm.as_ref().map(|l| l as &dyn core_chat::Llm)).map_err(err)
+        let embedder = LlmState::embedder_available(&app).then(|| llm::AppEmbedder {
+            state: state.inner(),
+            app: app.clone(),
+        });
+        core_chat::ask_with(
+            &db,
+            &question,
+            llm.as_ref().map(|l| l as &dyn core_chat::Llm),
+            embedder.as_ref().map(|e| e as &dyn core_chat::rag::Embedder),
+            chrono::Local::now().date_naive(),
+        )
+        .map_err(err)
     })
     .await
+}
+
+/// Indexação em andamento (uma por vez): conversa e sinal de cancelamento.
+#[derive(Default)]
+struct RagState {
+    job: Mutex<Option<(String, Arc<AtomicBool>)>>,
+}
+
+/// Situação das perguntas sobre o conteúdo numa conversa, para o chat.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RagInfo {
+    #[serde(flatten)]
+    index: core_chat::rag::IndexStatus,
+    /// Esta conversa está sendo indexada agora.
+    running: bool,
+    /// Outra conversa está sendo indexada.
+    busy_elsewhere: bool,
+    embedder_downloaded: bool,
+    llm_available: bool,
+    message_count: i64,
+}
+
+#[tauri::command]
+async fn rag_status(app: AppHandle, id: String) -> CmdResult<RagInfo> {
+    blocking(move || {
+        let db = open(&app, &id)?;
+        let job = app
+            .state::<RagState>()
+            .job
+            .lock()
+            .map_err(err)?
+            .as_ref()
+            .map(|(j, _)| j.clone());
+        Ok(RagInfo {
+            index: core_chat::rag::status(&db, core_llm::E5_SMALL.id).map_err(err)?,
+            running: job.as_deref() == Some(id.as_str()),
+            busy_elsewhere: job.is_some_and(|j| j != id),
+            embedder_downloaded: LlmState::embedder_available(&app),
+            llm_available: LlmState::available(&app),
+            message_count: db.message_count().map_err(err)?,
+        })
+    })
+    .await
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RagProgress {
+    id: String,
+    done: i64,
+    total: i64,
+}
+
+/// Indexa a conversa para as perguntas sobre o conteúdo (ou continua de onde parou), com eventos
+/// `rag-progress`. Termina ao acabar, ao ser cancelada (`rag_cancel`) ou num erro; o que já foi
+/// indexado fica gravado.
+#[tauri::command]
+async fn rag_index(app: AppHandle, id: String) -> CmdResult<core_chat::rag::IndexStatus> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let rag = app.state::<RagState>();
+        let mut job = rag.job.lock().map_err(err)?;
+        if job.is_some() {
+            return Err("já existe uma indexação em andamento".into());
+        }
+        *job = Some((id.clone(), cancel.clone()));
+    }
+    let app2 = app.clone();
+    let result = blocking(move || {
+        let mut db = open(&app2, &id)?;
+        let state = app2.state::<LlmState>();
+        let embedder = llm::AppEmbedder {
+            state: state.inner(),
+            app: app2.clone(),
+        };
+        let mut last = std::time::Instant::now();
+        core_chat::rag::index(&mut db, &embedder, &cancel, &mut |done, total| {
+            if done == total || last.elapsed().as_millis() >= 300 {
+                last = std::time::Instant::now();
+                let _ = app2.emit(
+                    "rag-progress",
+                    RagProgress {
+                        id: id.clone(),
+                        done,
+                        total,
+                    },
+                );
+            }
+        })
+        .map_err(err)
+    })
+    .await;
+    if let Ok(mut job) = app.state::<RagState>().job.lock() {
+        job.take();
+    }
+    result
+}
+
+#[tauri::command]
+fn rag_cancel(state: tauri::State<RagState>) {
+    if let Ok(job) = state.job.lock()
+        && let Some((_, cancel)) = job.as_ref()
+    {
+        cancel.store(true, Ordering::SeqCst);
+    }
 }
 
 /// Situação do modelo para o chat: `"off"` (sem modelo, só regras fixas), `"idle"` (ainda não
@@ -407,6 +525,12 @@ async fn llm_delete_model(app: AppHandle, model_id: String) -> CmdResult<()> {
         if state.active_model() == Some(spec.id) {
             state.stop();
         }
+        if spec.id == core_llm::E5_SMALL.id {
+            if app.state::<RagState>().job.lock().map_err(err)?.is_some() {
+                return Err("espere a indexação terminar (ou cancele) antes de apagar o modelo de busca".into());
+            }
+            state.stop_embedder();
+        }
         let dest = llm::download_dir(&app)?.join(spec.file);
         for path in [core_llm::partial_path(&dest), dest] {
             if path.exists() {
@@ -429,6 +553,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(ImportState::default())
+        .manage(RagState::default())
         .manage(LlmState::default())
         .invoke_handler(tauri::generate_handler![
             list_conversations,
@@ -437,6 +562,9 @@ pub fn run() {
             get_sticker_thumb,
             chat_ask,
             chat_examples,
+            rag_status,
+            rag_index,
+            rag_cancel,
             get_chat_me,
             set_chat_me,
             llm_status,

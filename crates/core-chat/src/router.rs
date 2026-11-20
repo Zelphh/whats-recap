@@ -39,6 +39,13 @@ static RETRIEVAL_RE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
+// "quanto custou o conserto?", "quantos anos a mãe dela fez?": valores ditos na conversa, não
+// contagens de mensagens (o "quant" casaria com `QUANT_RE`).
+static CONTENT_AMOUNT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(quant[oa]s? (custou|custa|custaram|deu|ficou|ficaram|pag\w*|cobr\w*|gast\w*)|quantos anos)\b")
+        .unwrap()
+});
+
 /// Minúsculas e sem acentos: a forma usada por todas as heurísticas.
 pub fn fold(s: &str) -> String {
     core_stats::text::strip_accents(&s.to_lowercase())
@@ -48,6 +55,8 @@ pub fn route(question: &str) -> Route {
     let q = fold(question);
     if GLOBAL_RE.is_match(&q) {
         Route::Global
+    } else if CONTENT_AMOUNT_RE.is_match(&q) {
+        Route::Retrieval
     } else if QUANT_RE.is_match(&q) || crate::intent::is_timed_what(&q) {
         // "o que ela mandou das 7h às 8h?" é um filtro (lista de mensagens), não pergunta de conteúdo.
         Route::Quantitative
@@ -75,6 +84,8 @@ mod tests {
             "me mostra as mensagens do Bruno de madrugada",
             "o que a gente mandou entre 22h e 2h?",
             "me mostra o que ela escreveu de madrugada",
+            "mostra o que a Ana mandou no natal do ano passado",
+            "o que ele escreveu em 15/03/2024?",
         ] {
             assert_eq!(route(q), Route::Quantitative, "{q}");
         }
@@ -82,6 +93,9 @@ mod tests {
             "quando a gente combinou a viagem pra Floripa?",
             "o que ela disse sobre o emprego novo?",
             "onde fomos no aniversário?",
+            "quanto custou o conserto do carro?",
+            "quantos anos a mãe da Ana fez?",
+            "de quanto ficou o aluguel depois da negociação?",
         ] {
             assert_eq!(route(q), Route::Retrieval, "{q}");
         }

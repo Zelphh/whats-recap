@@ -1,10 +1,13 @@
 //! Modelo de linguagem do chat no app: onde ficam o `llama-server` e os modelos, qual modelo roda
 //! (na GPU, se couber; senão na CPU), o aquecimento dos prompts e o estado para a interface.
 //!
+//! O embedder das perguntas sobre o conteúdo (e5-small) roda num segundo `llama-server`, na CPU,
+//! que sobe na primeira indexação ou pergunta sobre o conteúdo.
+//!
 //! O `llama-server` vem no instalador, na pasta `llama/` dos recursos (`scripts/setup-llama.ps1`
 //! prepara a pasta). Os modelos não: são baixados pelo app para `<app_data>/models`.
 
-use core_llm::{Backend, Choice, Client, Device, ModelSpec, Server, ServerConfig};
+use core_llm::{Backend, Choice, Client, Device, E5_SMALL, ModelSpec, Server, ServerConfig};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -47,6 +50,8 @@ pub struct LlmState {
     last_error: Mutex<Option<String>>,
     /// Download em andamento: modelo e sinal de cancelamento.
     download: Mutex<Option<(&'static str, Arc<AtomicBool>)>>,
+    /// Servidor do embedder (CPU), separado do de chat.
+    embedder: Mutex<Option<Server>>,
 }
 
 const SERVER_EXE: &str = if cfg!(windows) {
@@ -202,7 +207,8 @@ impl LlmState {
         prompts.map(|_| ())
     }
 
-    /// Encerra o servidor (libera a VRAM). A próxima pergunta livre sobe de novo.
+    /// Encerra os servidores (libera a VRAM e a memória do embedder). A próxima pergunta livre sobe
+    /// de novo; uma indexação em andamento sobe o embedder de novo no próximo lote.
     pub fn stop(&self) {
         if let Ok(mut s) = self.server.lock() {
             s.take();
@@ -210,6 +216,36 @@ impl LlmState {
         if let Ok(mut a) = self.active.lock() {
             a.take();
         }
+        self.stop_embedder();
+    }
+
+    pub fn stop_embedder(&self) {
+        if let Ok(mut e) = self.embedder.lock() {
+            e.take();
+        }
+    }
+
+    /// Há o executável e o embedder: a conversa pode ser indexada.
+    pub fn embedder_available(app: &AppHandle) -> bool {
+        llama_bin(app).is_some() && model_path(app, &E5_SMALL).is_some()
+    }
+
+    /// Cliente do embedder, subindo o servidor se preciso (na CPU, ~1 s).
+    fn ensure_embedder(&self, app: &AppHandle) -> Result<Client, String> {
+        let mut guard = self.embedder.lock().map_err(err)?;
+        if let Some(s) = guard.as_ref() {
+            return Ok(s.client().clone());
+        }
+        let bin = llama_bin(app).ok_or("o llama-server não foi encontrado na instalação")?;
+        let model = model_path(app, &E5_SMALL).ok_or("o modelo de busca não foi baixado")?;
+        let mut cfg = ServerConfig::new(bin, model);
+        cfg.args = E5_SMALL.args.iter().map(|s| s.to_string()).collect();
+        cfg.parallel = 2;
+        cfg.log = app.path().app_data_dir().ok().map(|d| d.join("llama-embed.log"));
+        let server = Server::start(&cfg).map_err(|e| format!("o modelo de busca não carregou: {e}"))?;
+        let client = server.client().clone();
+        *guard = Some(server);
+        Ok(client)
     }
 
     /// Começa um download; erro se já houver um.
@@ -254,31 +290,31 @@ impl LlmState {
             .map(|c| active(c, gpu.as_ref().filter(|_| c.backend == Backend::Gpu)));
         let downloading = self.download.lock().ok().and_then(|d| d.as_ref().map(|(m, _)| *m));
         let download_dir = download_dir(app).ok();
+        let model_info = |m: &ModelSpec| {
+            let path = model_path(app, m);
+            let partial = download_dir
+                .as_ref()
+                .and_then(|d| core_llm::partial_path(&d.join(m.file)).metadata().ok())
+                .map(|md| md.len())
+                .filter(|_| path.is_none());
+            ModelInfo {
+                spec: *m,
+                downloaded: path.is_some(),
+                removable: path
+                    .as_ref()
+                    .is_some_and(|p| download_dir.as_ref().is_some_and(|d| p.starts_with(d))),
+                path: path.map(|p| p.display().to_string()),
+                partial_bytes: partial,
+                downloading: downloading == Some(m.id),
+            }
+        };
         LlmInfo {
             status: self.status(app),
             runtime: bin.is_some(),
             gpu,
-            models: core_llm::MODELS
-                .iter()
-                .map(|m| {
-                    let path = model_path(app, m);
-                    let partial = download_dir
-                        .as_ref()
-                        .and_then(|d| core_llm::partial_path(&d.join(m.file)).metadata().ok())
-                        .map(|md| md.len())
-                        .filter(|_| path.is_none());
-                    ModelInfo {
-                        spec: *m,
-                        downloaded: path.is_some(),
-                        removable: path
-                            .as_ref()
-                            .is_some_and(|p| download_dir.as_ref().is_some_and(|d| p.starts_with(d))),
-                        path: path.map(|p| p.display().to_string()),
-                        partial_bytes: partial,
-                        downloading: downloading == Some(m.id),
-                    }
-                })
-                .collect(),
+            models: core_llm::MODELS.iter().map(model_info).collect(),
+            embedder: model_info(&E5_SMALL),
+            embedder_loaded: self.embedder.lock().is_ok_and(|e| e.is_some()),
             active: self.active.lock().ok().and_then(|a| a.clone()),
             next: next.filter(|_| self.active.lock().is_ok_and(|a| a.is_none())),
             last_error: self.last_error.lock().ok().and_then(|e| e.clone()),
@@ -327,6 +363,9 @@ pub struct LlmInfo {
     /// GPU com mais memória livre agora (com o modelo carregado, a memória livre já o desconta).
     gpu: Option<Device>,
     models: Vec<ModelInfo>,
+    /// Modelo de busca das perguntas sobre o conteúdo.
+    embedder: ModelInfo,
+    embedder_loaded: bool,
     /// O que está carregado.
     active: Option<Active>,
     /// O que vai carregar na próxima pergunta livre (se nada estiver carregado).
@@ -353,5 +392,27 @@ impl core_chat::Llm for AppLlm<'_> {
                 Err(err(e))
             }
         }
+    }
+}
+
+/// Ponte entre o RAG e o embedder: sobe o servidor na primeira chamada (e de novo, se cair).
+pub struct AppEmbedder<'a> {
+    pub state: &'a LlmState,
+    pub app: AppHandle,
+}
+
+impl core_chat::rag::Embedder for AppEmbedder<'_> {
+    fn id(&self) -> &str {
+        E5_SMALL.id
+    }
+
+    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        let client = self.state.ensure_embedder(&self.app)?;
+        client.embed(texts).map_err(|e| {
+            if matches!(e, core_llm::LlmError::Http(_)) {
+                self.state.stop_embedder();
+            }
+            err(e)
+        })
     }
 }

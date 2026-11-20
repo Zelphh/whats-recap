@@ -151,6 +151,23 @@ impl ToolCall {
         }
     }
 
+    /// Aplica o período se a chamada não tiver nenhum (`first_occurrence` não tem período).
+    pub fn with_range_if_missing(mut self, start: NaiveDate, end: NaiveDate) -> Self {
+        match &mut self {
+            ToolCall::CountWord { from, to, .. }
+            | ToolCall::MessagesByHour { from, to, .. }
+            | ToolCall::MessagesByPeriod { from, to, .. }
+            | ToolCall::ResponseTime { from, to, .. }
+            | ToolCall::ListMessages(ListFilter { from, to, .. }) => {
+                if from.is_none() && to.is_none() {
+                    (*from, *to) = (Some(start), Some(end));
+                }
+            }
+            ToolCall::FirstOccurrence { .. } => {}
+        }
+        self
+    }
+
     /// Descarta `from`/`to` que não restringem nada (antes da primeira ou depois da última data da
     /// conversa). O LLM costuma preencher o período inteiro quando a pergunta não fala de datas; o
     /// resultado é o mesmo, mas a interpretação mostrada ao usuário fica poluída.
@@ -239,6 +256,9 @@ pub enum ToolError {
     Storage(#[from] core_storage::StorageError),
     #[error("erro no banco de dados: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// O modelo de linguagem ou o embedder falhou (servidor fora do ar, saída inválida).
+    #[error("{0}")]
+    Model(String),
 }
 
 /// Contexto de uma conversa para executar ferramentas.

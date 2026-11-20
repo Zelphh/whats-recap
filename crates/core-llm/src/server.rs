@@ -14,6 +14,11 @@ use std::time::{Duration, Instant};
 /// O app monta as flags por modelo e backend com [`crate::Choice::args`].
 pub const RECOMMENDED_ARGS: &[&str] = &["-ngl", "99", "-c", "16384", "-fa", "off", "--reasoning", "off"];
 
+/// Um slot por prompt de sistema do chat (roteador, seleção de ferramenta e resposta sobre o
+/// conteúdo): cada um mantém o seu cache. O do RAG muda a cada pergunta (os trechos mudam); num slot
+/// próprio, não tira do cache os dois prompts fixos.
+pub const CHAT_SLOTS: u32 = 3;
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// Executável do `llama-server`.
@@ -26,6 +31,9 @@ pub struct ServerConfig {
     pub log: Option<PathBuf>,
     /// Quanto esperar o modelo carregar (de um HD lento, o 9B leva mais de um minuto).
     pub ready_timeout: Duration,
+    /// Slots (`-np`): pedidos atendidos em paralelo, cada um com o seu cache. O contexto (`-c`) é
+    /// dividido entre eles, então mais slots não gastam mais memória.
+    pub parallel: u32,
 }
 
 impl ServerConfig {
@@ -36,6 +44,7 @@ impl ServerConfig {
             args: RECOMMENDED_ARGS.iter().map(|s| s.to_string()).collect(),
             log: None,
             ready_timeout: Duration::from_secs(300),
+            parallel: CHAT_SLOTS,
         }
     }
 }
@@ -71,13 +80,12 @@ impl Server {
                 "--port",
                 &port.to_string(),
                 "--no-webui",
-                // Um slot por prompt de sistema (roteador e seleção de ferramenta): cada um mantém
-                // o seu cache na VRAM. Sem o cache em RAM, que copiava o slot ocioso (~58 MiB) a
-                // cada troca: com ele, ou com um slot só, cada chamada custava ~1 s a mais no Qwen3.5.
-                "-np",
-                "2",
+                // Sem o cache em RAM, que copiava o slot ocioso (~58 MiB) a cada troca: com ele, ou
+                // com um slot só, cada chamada custava ~1 s a mais no Qwen3.5.
                 "--cache-ram",
                 "0",
+                "-np",
+                &cfg.parallel.to_string(),
             ])
             .args(&cfg.args)
             .stdin(Stdio::null())

@@ -22,6 +22,10 @@ const CHAT: &str = "\
 ";
 
 fn with_db(f: impl FnOnce(&Db)) {
+    with_chat(CHAT, |db| f(db));
+}
+
+fn with_chat(chat: &str, f: impl FnOnce(&mut Db)) {
     let dir = std::env::temp_dir().join(format!(
         "wr-chat-{}-{:?}",
         std::process::id(),
@@ -29,7 +33,7 @@ fn with_db(f: impl FnOnce(&Db)) {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let txt = dir.join("chat.txt");
-    std::fs::write(&txt, CHAT).unwrap();
+    std::fs::write(&txt, chat).unwrap();
     let db_path = dir.join("chat.db");
     let source = core_parser::Source::open(&txt).unwrap();
     core_storage::import_new(
@@ -40,7 +44,7 @@ fn with_db(f: impl FnOnce(&Db)) {
         &AtomicBool::new(false),
     )
     .unwrap();
-    f(&Db::open(&db_path).unwrap());
+    f(&mut Db::open(&db_path).unwrap());
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -393,6 +397,48 @@ fn llm_answers_what_the_rules_do_not_understand() {
 }
 
 #[test]
+fn forgotten_relative_period_is_filled_in() {
+    with_db(|db| {
+        let today = NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
+        let fake = FakeLlm::new(
+            "quantitative",
+            json!({ "tool": "response_time", "args": { "author": "Bruno" } }),
+        );
+        let a = ask_on(
+            db,
+            "quanto o bruno demora pra responder no ano passado?",
+            Some(&fake),
+            today,
+        )
+        .unwrap();
+        assert_eq!(a.interpreted_by, Some(Interpreter::Llm));
+        // A conversa começa em 2024-01-01: o início do ano é redundante.
+        assert_eq!(a.tool.unwrap().range(), (None, NaiveDate::from_ymd_opt(2024, 12, 31)));
+        // Com as datas do modelo, nada muda.
+        let fake = FakeLlm::new(
+            "quantitative",
+            json!({ "tool": "list_messages", "args": { "author": "Ana Souza", "from": "2024-12-24", "to": "2024-12-25" } }),
+        );
+        let a = ask_on(
+            db,
+            "mostra o que a Ana mandou no natal do ano passado",
+            Some(&fake),
+            today,
+        )
+        .unwrap();
+        assert_eq!(a.route, Route::Quantitative);
+        assert_eq!(
+            a.tool.unwrap().range(),
+            (
+                NaiveDate::from_ymd_opt(2024, 12, 24),
+                NaiveDate::from_ymd_opt(2024, 12, 25)
+            )
+        );
+        assert_eq!(fake.calls.borrow().len(), 1, "o roteador por regras já decidiu");
+    });
+}
+
+#[test]
 fn rules_come_before_the_llm() {
     with_db(|db| {
         let fake = FakeLlm::new("global", json!({}));
@@ -524,5 +570,207 @@ fn warmup_prompts_are_the_ones_the_questions_use() {
             assert_eq!(system, p_system);
             assert_eq!(schema, p_schema);
         }
+    });
+}
+
+/// Embedder de teste: saco de palavras (minúsculas, sem acentos) espalhado por hash em 512
+/// dimensões. Textos com palavras em comum ficam parecidos.
+struct FakeEmbedder {
+    id: &'static str,
+    calls: RefCell<usize>,
+    /// Falha a partir desta chamada (para simular o servidor caindo no meio).
+    fail_from: Option<usize>,
+}
+
+impl FakeEmbedder {
+    fn new() -> Self {
+        FakeEmbedder {
+            id: "fake",
+            calls: RefCell::default(),
+            fail_from: None,
+        }
+    }
+}
+
+impl rag::Embedder for FakeEmbedder {
+    fn id(&self) -> &str {
+        self.id
+    }
+
+    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        let n = {
+            let mut c = self.calls.borrow_mut();
+            *c += 1;
+            *c
+        };
+        if self.fail_from.is_some_and(|f| n >= f) {
+            return Err("servidor fora do ar".into());
+        }
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let mut v = vec![0f32; 512];
+                for w in router::fold(t)
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|w| w.len() > 2)
+                {
+                    let h = w.bytes().fold(7u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
+                    v[(h % 512) as usize] += 1.0;
+                }
+                let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+                v.iter().map(|x| x / norm).collect()
+            })
+            .collect())
+    }
+}
+
+fn index_all(db: &mut Db, e: &FakeEmbedder) -> rag::IndexStatus {
+    rag::index(db, e, &AtomicBool::new(false), &mut |_, _| {}).unwrap()
+}
+
+#[test]
+fn chunks_follow_pauses() {
+    with_db(|db| {
+        // 01:00–01:03; 14:00–14:10; 23:00; 15/03 (a mídia #8 fica dentro, mas não entra no texto); 2025.
+        assert_eq!(
+            rag::plan_chunks(db).unwrap(),
+            [(1, 3), (4, 5), (6, 6), (7, 9), (10, 10)]
+        );
+    });
+}
+
+#[test]
+fn long_talks_become_overlapping_windows() {
+    let chat: String = (0..30)
+        .map(|i| {
+            format!(
+                "01/01/2024 10:{i:02} - {}: mensagem {i}\n",
+                if i % 2 == 0 { "Ana" } else { "Bruno" }
+            )
+        })
+        .collect();
+    with_chat(&chat, |db| {
+        assert_eq!(rag::plan_chunks(db).unwrap(), [(1, 12), (11, 22), (21, 30)]);
+    });
+}
+
+#[test]
+fn index_resumes_and_rebuilds_for_another_embedder() {
+    // 12 dias de 30 mensagens: 36 trechos, mais que um lote (32).
+    let chat: String = (0..360)
+        .map(|i| format!("{:02}/01/2024 10:{:02} - Ana: assunto {i}\n", 1 + i / 30, i % 30))
+        .collect();
+    with_chat(&chat, |db| {
+        let e = FakeEmbedder::new();
+        assert_eq!(rag::status(db, "fake").unwrap().total, 0);
+        // Cai na segunda chamada: o primeiro lote fica gravado.
+        let failing = FakeEmbedder {
+            fail_from: Some(2),
+            ..FakeEmbedder::new()
+        };
+        assert!(rag::index(db, &failing, &AtomicBool::new(false), &mut |_, _| {}).is_err());
+        let st = rag::status(db, "fake").unwrap();
+        assert!(st.embedded > 0 && st.embedded < st.total && !st.ready, "{st:?}");
+        let first_batch = st.embedded;
+
+        // Retoma: só os trechos que faltavam vão ao embedder.
+        let mut seen = Vec::new();
+        let st = rag::index(db, &e, &AtomicBool::new(false), &mut |done, total| {
+            seen.push((done, total))
+        })
+        .unwrap();
+        assert!(st.ready, "{st:?}");
+        assert_eq!(seen.first().unwrap().0, first_batch);
+        assert_eq!(*seen.last().unwrap(), (st.total, st.total));
+
+        // Outro embedder: o índice é refeito (cancelado antes do primeiro lote, fica vazio).
+        let other = FakeEmbedder {
+            id: "outro",
+            ..FakeEmbedder::new()
+        };
+        assert!(rag::status(db, "outro").unwrap().stale);
+        let st = rag::index(db, &other, &AtomicBool::new(true), &mut |_, _| {}).unwrap();
+        assert_eq!((st.embedded, st.stale, st.ready), (0, false, false));
+        assert!(index_all(db, &other).ready);
+    });
+}
+
+#[test]
+fn search_finds_the_matching_chunk() {
+    with_chat(CHAT, |db| {
+        let e = FakeEmbedder::new();
+        index_all(db, &e);
+        let hits = rag::search(db, &e, "a gente teve saudade da viagem?", 2).unwrap();
+        assert_eq!((hits[0].chunk.start_id, hits[0].chunk.end_id), (7, 9));
+        assert!(hits[0].score >= hits[1].score);
+    });
+}
+
+#[test]
+fn content_questions_answer_with_checked_citations() {
+    with_chat(CHAT, |db| {
+        let e = FakeEmbedder::new();
+        let fake = FakeLlm::new(
+            "retrieval",
+            json!({ "found": true, "answer": "Ela disse que sentia saudade da viagem (#7).", "citations": [7, 999] }),
+        );
+        let q = "o que ela disse sobre a viagem?";
+        let today = NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
+
+        // Sem índice: avisa e sugere mensagens com as palavras.
+        let a = ask_with(db, q, Some(&fake), Some(&e), today).unwrap();
+        assert!(a.text.contains("precisa ser indexada"), "{}", a.text);
+        assert!(fake.calls.borrow().is_empty());
+        // Sem embedder: precisa dos modelos.
+        let a = ask_with(db, q, Some(&fake), None, today).unwrap();
+        assert!(a.text.contains("busca por significado"), "{}", a.text);
+
+        index_all(db, &e);
+        let a = ask_with(db, q, Some(&fake), Some(&e), today).unwrap();
+        assert_eq!(a.route, Route::Retrieval);
+        assert_eq!(a.interpreted_by, Some(Interpreter::Llm));
+        assert_eq!(a.text, "Ela disse que sentia saudade da viagem (#7).");
+        // O id inventado (999) não vira citação.
+        assert_eq!(a.citations.iter().map(|m| m.id).collect::<Vec<_>>(), [7]);
+        let calls = fake.calls.borrow();
+        assert_eq!(calls.len(), 1, "o roteador por regras já decidiu");
+        assert!(
+            calls[0].0.contains("[7] 2024-03-15 Ana Souza: saudade da viagem"),
+            "{}",
+            calls[0].0
+        );
+        assert_eq!(calls[0].2, llm::rag_schema());
+    });
+}
+
+#[test]
+fn content_answers_without_valid_citations_are_refused() {
+    with_chat(CHAT, |db| {
+        let e = FakeEmbedder::new();
+        index_all(db, &e);
+        let today = NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
+        let q = "o que ela disse sobre a viagem?";
+        let fake = FakeLlm::new(
+            "retrieval",
+            json!({ "found": true, "answer": "Foi em Paris (#999).", "citations": [999] }),
+        );
+        let a = ask_with(db, q, Some(&fake), Some(&e), today).unwrap();
+        assert!(a.text.starts_with("Não achei uma mensagem que confirme"), "{}", a.text);
+        assert!(a.citations.is_empty());
+
+        let fake = FakeLlm::new(
+            "retrieval",
+            json!({ "found": false, "answer": "Não encontrei isso na conversa.", "citations": [] }),
+        );
+        let a = ask_with(db, q, Some(&fake), Some(&e), today).unwrap();
+        assert_eq!(a.text, "Não encontrei isso na conversa.");
+
+        // O modelo fora do ar vira resposta, não erro.
+        let fake = FakeLlm {
+            tool: Err("conexão recusada".into()),
+            ..FakeLlm::new("retrieval", json!({}))
+        };
+        let a = ask_with(db, q, Some(&fake), Some(&e), today).unwrap();
+        assert!(a.text.contains("conexão recusada"), "{}", a.text);
     });
 }

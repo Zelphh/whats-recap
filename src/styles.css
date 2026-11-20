@@ -681,3 +681,8 @@ code.kbd { font-family: var(--f-mono); background: var(--lime); color: var(--lim
 .ask-bar input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; font-size: 16px; }
 .send { width: 46px; height: 46px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; flex: none; }
 .send:disabled { opacity: 0.5; }
+
+/* Chat: perguntas sobre o conteúdo (índice de busca da conversa). */
+.page-head > .note { margin-top: 10px; max-width: 560px; }
+.rag-card { margin-top: 16px; padding: 20px 24px; gap: 12px; border-radius: 28px; max-width: 640px; }
+.rag-card .note { margin-top: 4px; max-width: 460px; }

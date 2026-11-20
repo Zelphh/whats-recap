@@ -20,12 +20,17 @@ mod devices;
 mod download;
 mod models;
 mod server;
+#[cfg(windows)]
+mod vram_windows;
 
 pub use client::{Client, Completion, Timings};
 pub use devices::{Device, list_devices};
 pub use download::{DownloadPhase, DownloadSpec, download, partial_path};
-pub use models::{Backend, CPU_ARGS, Choice, GPU_ARGS, MODELS, ModelSpec, QWEN35_4B, QWEN35_9B, model, plan};
-pub use server::{RECOMMENDED_ARGS, Server, ServerConfig};
+pub use models::{
+    Backend, CPU_ARGS, Choice, E5_PASSAGE, E5_QUERY, E5_SMALL, GPU_ARGS, MODELS, ModelSpec, QWEN35_4B, QWEN35_9B,
+    model, plan,
+};
+pub use server::{CHAT_SLOTS, RECOMMENDED_ARGS, Server, ServerConfig};
 
 use std::path::PathBuf;
 use std::time::Duration;

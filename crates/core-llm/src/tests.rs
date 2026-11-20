@@ -341,3 +341,62 @@ fn warm_sends_each_prompt_once() {
     assert_eq!(req["messages"][0]["content"], "sistema");
     assert_eq!(req["max_tokens"], 1);
 }
+
+#[test]
+fn embed_returns_normalized_vectors_in_order() {
+    let body = json!({ "data": [
+        { "index": 1, "embedding": [0.0, 2.0] },
+        { "index": 0, "embedding": [3.0, 4.0] }
+    ] });
+    let (url, rx) = fake_server(200, body);
+    let v = Client::new(&url).embed(&["a".into(), "b".into()]).unwrap();
+    assert_eq!(v, vec![vec![0.6, 0.8], vec![0.0, 1.0]]);
+    assert_eq!(rx.recv().unwrap(), json!({ "input": ["a", "b"] }));
+
+    // Menos vetores que textos é erro, não um índice desalinhado.
+    let (url, _) = fake_server(200, json!({ "data": [{ "index": 0, "embedding": [1.0] }] }));
+    assert!(Client::new(&url).embed(&["a".into(), "b".into()]).is_err());
+    assert!(Client::new("http://127.0.0.1:9").embed(&[]).unwrap().is_empty());
+}
+
+#[test]
+fn embedder_is_in_the_catalog_but_not_a_chat_model() {
+    assert_eq!(model("e5-small-q8"), Some(&E5_SMALL));
+    assert!(!MODELS.contains(&E5_SMALL));
+    assert!(E5_SMALL.args.contains(&"--embedding"));
+}
+
+#[test]
+fn free_memory_discounts_other_processes() {
+    let gpu = |free_mib| Device {
+        id: "Vulkan0".into(),
+        name: "AMD Radeon RX 7600".into(),
+        total_mib: 8176,
+        free_mib,
+    };
+    let usage = |name: &str, used_mib| devices::AdapterUsage {
+        name: name.into(),
+        used_mib,
+    };
+    // O Vulkan diz 7.362 livres, mas outro processo carregou um modelo: vale o contador.
+    let mut d = [gpu(7362)];
+    devices::apply_usage(&mut d, &[usage("AMD Radeon RX 7600", 5000), usage("Intel UHD", 100)]);
+    assert_eq!(d[0].free_mib, 3176);
+    // O Vulkan mais restritivo prevalece; placa sem contador fica como está.
+    let mut d = [gpu(2000)];
+    devices::apply_usage(&mut d, &[usage("amd  radeon rx 7600", 1900)]);
+    assert_eq!(d[0].free_mib, 2000);
+    let mut d = [gpu(7362)];
+    devices::apply_usage(&mut d, &[usage("NVIDIA GeForce RTX 3060", 9000)]);
+    assert_eq!(d[0].free_mib, 7362);
+
+    assert_eq!(
+        devices::parse_luid("luid_0x00000000_0x05F768D9_phys_0"),
+        Some(0x05F7_68D9)
+    );
+    assert_eq!(
+        devices::parse_luid("luid_0x00000001_0x00000002_phys_0"),
+        Some((1 << 32) | 2)
+    );
+    assert_eq!(devices::parse_luid("_Total"), None);
+}

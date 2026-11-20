@@ -11,6 +11,10 @@ sha2 = "0.11.0"
 thiserror = "2.0.21"
 ureq = { version = "3.5.0", features = ["json"] }
 
+[target.'cfg(windows)'.dependencies]
+# VRAM em uso por todos os processos (DXGI + contador de desempenho); o mesmo `windows` do Tauri.
+windows = { version = "0.61.3", features = ["Win32_Graphics_Dxgi", "Win32_System_Performance"] }
+
 [dev-dependencies]
 # O example e o teste com modelo real usam os contratos do chat.
 chrono = "0.4.45"

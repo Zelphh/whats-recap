@@ -122,6 +122,44 @@ impl Client {
 }
 
 impl Client {
+    /// Vetores de `texts` (`/v1/embeddings`; servidor com `--embedding`), na ordem dada e
+    /// normalizados (norma 1: a similaridade de cosseno vira produto escalar).
+    pub fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, LlmError> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut resp = self
+            .agent
+            .post(format!("{}/v1/embeddings", self.url))
+            .send_json(json!({ "input": texts }))?;
+        let status = resp.status();
+        let text = resp.body_mut().read_to_string()?;
+        if !status.is_success() {
+            return Err(LlmError::Http(format!("HTTP {status}: {}", shorten(&text))));
+        }
+        let resp: Value =
+            serde_json::from_str(&text).map_err(|e| LlmError::Http(format!("resposta não é JSON: {e}")))?;
+        let mut data: Vec<&Value> = resp["data"].as_array().map(|a| a.iter().collect()).unwrap_or_default();
+        data.sort_by_key(|d| d["index"].as_u64());
+        let vectors: Vec<Vec<f32>> = data
+            .iter()
+            .map(|d| {
+                let v: Vec<f32> = d["embedding"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(Value::as_f64).map(|x| x as f32).collect())
+                    .unwrap_or_default();
+                normalize(v)
+            })
+            .collect();
+        if vectors.len() != texts.len() || vectors.iter().any(Vec::is_empty) {
+            return Err(LlmError::InvalidOutput {
+                error: format!("{} vetores para {} textos", vectors.len(), texts.len()),
+                content: shorten(&text),
+            });
+        }
+        Ok(vectors)
+    }
+
     /// Processa cada prompt de sistema (o servidor põe cada um num slot livre) e descarta a saída.
     /// A próxima chamada com o mesmo prompt de sistema reaproveita o cache e só processa a pergunta.
     /// Erros são ignorados: aquecer é só otimização.
@@ -133,6 +171,14 @@ impl Client {
             let _ = self.chat::<Value>(system, ".", schema, 1);
         }
     }
+}
+
+fn normalize(mut v: Vec<f32>) -> Vec<f32> {
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        v.iter_mut().for_each(|x| *x /= norm);
+    }
+    v
 }
 
 fn shorten(s: &str) -> String {

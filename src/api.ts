@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ChatAnswer, ConversationInfo, ImportSummary, ListFilter, LlmInfo, LlmStatus, MessageRow, Stats, StatsSettings } from "./types";
+import type {
+  ChatAnswer, ConversationInfo, ImportSummary, ListFilter, LlmInfo, LlmStatus, MessageRow, RagIndexStatus, RagInfo, Stats,
+  StatsSettings,
+} from "./types";
 
 export const api = {
   listConversations: () => invoke<ConversationInfo[]>("list_conversations"),
@@ -30,4 +33,7 @@ export const api = {
   llmCancelDownload: () => invoke<void>("llm_cancel_download"),
   llmDeleteModel: (modelId: string) => invoke<void>("llm_delete_model", { modelId }),
   locateDate: (id: string, date: string) => invoke<number | null>("locate_date", { id, date }),
+  ragStatus: (id: string) => invoke<RagInfo>("rag_status", { id }),
+  ragIndex: (id: string) => invoke<RagIndexStatus>("rag_index", { id }),
+  ragCancel: () => invoke<void>("rag_cancel"),
 };

@@ -127,6 +127,15 @@ impl SessionBuilder {
     }
 }
 
+/// Um trecho do índice de busca: as mensagens de `start_id` a `end_id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkRow {
+    pub id: i64,
+    pub start_id: i64,
+    pub end_id: i64,
+}
+
 pub struct Db {
     conn: Connection,
 }
@@ -361,6 +370,84 @@ impl Db {
                 |r| r.get(0),
             )
             .optional()?)
+    }
+
+    /// Troca os trechos do índice de busca (chat tipo 2) por `ranges` (primeira e última mensagem de
+    /// cada um), todos sem vetor. O texto não é guardado: sai das mensagens na hora de usar.
+    pub fn replace_chunks(&mut self, ranges: &[(i64, i64)]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM chunks", [])?;
+        {
+            let mut st = tx.prepare("INSERT INTO chunks(start_id, end_id, text) VALUES (?1, ?2, '')")?;
+            for (start, end) in ranges {
+                st.execute(params![start, end])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Trechos sem vetor, em ordem (para retomar a indexação de onde parou).
+    pub fn pending_chunks(&self, limit: i64) -> Result<Vec<ChunkRow>> {
+        let mut st = self
+            .conn
+            .prepare_cached("SELECT id, start_id, end_id FROM chunks WHERE embedding IS NULL ORDER BY id LIMIT ?1")?;
+        let rows = st.query_map([limit], |r| {
+            Ok(ChunkRow {
+                id: r.get(0)?,
+                start_id: r.get(1)?,
+                end_id: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Grava os vetores (`f32` little-endian) de vários trechos numa transação.
+    pub fn set_chunk_embeddings(&mut self, items: &[(i64, Vec<f32>)]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut st = tx.prepare("UPDATE chunks SET embedding = ?1 WHERE id = ?2")?;
+            for (id, v) in items {
+                let bytes: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+                st.execute(params![bytes, id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Trechos no índice e quantos já têm vetor.
+    pub fn chunk_counts(&self) -> Result<(i64, i64)> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*), COUNT(embedding) FROM chunks", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?)
+    }
+
+    /// Chama `f` com cada trecho que tem vetor, sem carregar todos de uma vez.
+    pub fn for_each_chunk_vector(&self, mut f: impl FnMut(ChunkRow, &[f32])) -> Result<()> {
+        let mut st = self
+            .conn
+            .prepare("SELECT id, start_id, end_id, embedding FROM chunks WHERE embedding IS NOT NULL")?;
+        let mut rows = st.query([])?;
+        let mut v = Vec::new();
+        while let Some(r) = rows.next()? {
+            let bytes: Vec<u8> = r.get(3)?;
+            v.clear();
+            v.extend(
+                bytes
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+            );
+            let chunk = ChunkRow {
+                id: r.get(0)?,
+                start_id: r.get(1)?,
+                end_id: r.get(2)?,
+            };
+            f(chunk, &v);
+        }
+        Ok(())
     }
 
     /// Recalcula as sessões com um novo limite de intervalo.

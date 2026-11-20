@@ -1,4 +1,5 @@
-//! Chat sobre a conversa (feature 21: perguntas quantitativas, tipo 1).
+//! Chat sobre a conversa: perguntas quantitativas (feature 21, tipo 1) e sobre o conteúdo
+//! (feature 22, tipo 2).
 //!
 //! Fluxo: [`router::route`] classifica a pergunta; [`intent::interpret`] escolhe a ferramenta e
 //! os parâmetros nos formatos óbvios; [`tools::Conversation::execute`] faz a contagem no SQLite;
@@ -6,10 +7,14 @@
 //!
 //! Onde a heurística não resolve, um [`Llm`] (se houver) classifica a pergunta e escolhe a
 //! ferramenta, com os prompts e schemas de [`llm`]. A contagem continua sendo feita aqui.
+//!
+//! Perguntas sobre o conteúdo vão para o [`rag`]: busca por significado nos trechos indexados e
+//! resposta do LLM com citações conferidas.
 
 pub mod answer;
 pub mod intent;
 pub mod llm;
+pub mod rag;
 pub mod router;
 mod text;
 pub mod tools;
@@ -166,8 +171,17 @@ mensagem de madrugada?”."
     )
 }
 
-fn retrieval_answer(db: &Db, conv: &Conversation, question: &str) -> Result<ChatAnswer, ToolError> {
-    // Enquanto o RAG (fase 9) não existe, sugere mensagens com as palavras da pergunta.
+/// Por que a pergunta sobre o conteúdo não foi respondida pelo RAG.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NoRag {
+    /// Sem o modelo de linguagem ou sem o embedder.
+    Models,
+    /// A conversa ainda não foi indexada (ou a indexação não terminou).
+    Index,
+}
+
+fn retrieval_answer(db: &Db, conv: &Conversation, question: &str, why: NoRag) -> Result<ChatAnswer, ToolError> {
+    // Sem o RAG, sugere mensagens com as palavras da pergunta.
     let mut stop = conv.settings.stopwords.clone();
     stop.extend(QUESTION_WORDS.iter().map(|w| w.to_string()));
     let terms: Vec<String> = core_stats::text::Normalizer::new(&stop, false)
@@ -175,14 +189,17 @@ fn retrieval_answer(db: &Db, conv: &Conversation, question: &str) -> Result<Chat
         .filter(|w| w.chars().count() >= 3)
         .collect();
     let citations = db.search_any(&terms, RETRIEVAL_HINTS)?;
+    let intro = match why {
+        NoRag::Models => {
+            "Perguntas sobre o conteúdo precisam do modelo de linguagem e da busca por significado \
+(Configurações › Modelo de linguagem)."
+        }
+        NoRag::Index => "Para responder perguntas sobre o conteúdo, a conversa precisa ser indexada (no topo do chat).",
+    };
     let text = if citations.is_empty() {
-        "Perguntas sobre o conteúdo da conversa ainda não são respondidas automaticamente, e não achei \
-mensagens com as palavras da pergunta. Tente a busca na tela Conversa."
-            .to_string()
+        format!("{intro} Não achei mensagens com as palavras da pergunta; tente a busca na tela Conversa.")
     } else {
-        "Perguntas sobre o conteúdo da conversa ainda não são respondidas automaticamente. Enquanto isso, \
-estas mensagens têm palavras da sua pergunta:"
-            .to_string()
+        format!("{intro} Enquanto isso, estas mensagens têm palavras da sua pergunta:")
     };
     Ok(ChatAnswer {
         citations,
@@ -249,8 +266,7 @@ fn conversation_span(db: &Db) -> Result<(NaiveDate, NaiveDate), core_storage::St
 }
 
 /// Prompt de sistema da seleção de ferramenta nesta conversa (com a data de hoje).
-fn tool_prompt(conv: &Conversation, (first, last): (NaiveDate, NaiveDate)) -> String {
-    let today = chrono::Local::now().date_naive();
+fn tool_prompt(conv: &Conversation, (first, last): (NaiveDate, NaiveDate), today: NaiveDate) -> String {
     let iso = |d: NaiveDate| d.format("%Y-%m-%d").to_string();
     llm::tool_selection_prompt(&conv.authors, conv.me.as_deref(), &iso(first), &iso(last), &iso(today))
 }
@@ -263,19 +279,33 @@ pub fn llm_prompts(db: &Db) -> Result<Vec<(String, Value)>, ToolError> {
     let span = conversation_span(db)?;
     Ok(vec![
         (llm::router_prompt(), llm::router_schema()),
-        (tool_prompt(&conv, span), llm::tool_schema(&conv.authors)),
+        (tool_prompt(&conv, span, today()), llm::tool_schema(&conv.authors)),
     ])
 }
 
+fn today() -> NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
 /// Escolhe a ferramenta pelo LLM. `None`: nenhuma ferramenta responde a pergunta.
-fn llm_tool(llm: &dyn Llm, db: &Db, conv: &Conversation, question: &str) -> Result<Option<ToolCall>, String> {
+fn llm_tool(
+    llm: &dyn Llm,
+    db: &Db,
+    conv: &Conversation,
+    question: &str,
+    today: NaiveDate,
+) -> Result<Option<ToolCall>, String> {
     let (first, last) = conversation_span(db).map_err(|e| e.to_string())?;
-    let system = tool_prompt(conv, (first, last));
+    let system = tool_prompt(conv, (first, last), today);
     let out = llm.complete(&system, question, &llm::tool_schema(&conv.authors), TOOL_MAX_TOKENS)?;
     if out["tool"] == llm::NO_TOOL {
         return Ok(None);
     }
-    let call: ToolCall = serde_json::from_value(out).map_err(|e| format!("ferramenta inválida: {e}"))?;
+    let mut call: ToolCall = serde_json::from_value(out).map_err(|e| format!("ferramenta inválida: {e}"))?;
+    // O modelo às vezes esquece o período ("no ano passado"); os que o código sabe calcular entram aqui.
+    if let Some((from, to)) = llm::relative_range(question, today) {
+        call = call.with_range_if_missing(from, to);
+    }
     // "Desde o começo até hoje" é o mesmo que não filtrar, e polui o "como calculei".
     Ok(Some(call.without_redundant_range(first, last)))
 }
@@ -283,6 +313,23 @@ fn llm_tool(llm: &dyn Llm, db: &Db, conv: &Conversation, question: &str) -> Resu
 /// Responde a uma pergunta. As regras fixas vêm primeiro (instantâneas e exatas nos formatos que
 /// conhecem); o `llm`, se houver, só entra quando elas não entendem a pergunta.
 pub fn ask(db: &Db, question: &str, llm: Option<&dyn Llm>) -> Result<ChatAnswer, ToolError> {
+    ask_with(db, question, llm, None, today())
+}
+
+/// [`ask`] com a data de hoje fixa (para os períodos relativos; os testes usam uma data conhecida).
+pub fn ask_on(db: &Db, question: &str, llm: Option<&dyn Llm>, today: NaiveDate) -> Result<ChatAnswer, ToolError> {
+    ask_with(db, question, llm, None, today)
+}
+
+/// Responde a uma pergunta com tudo o que houver: regras fixas, `llm` e, para perguntas sobre o
+/// conteúdo, o `embedder` (se a conversa estiver indexada com ele).
+pub fn ask_with(
+    db: &Db,
+    question: &str,
+    llm: Option<&dyn Llm>,
+    embedder: Option<&dyn rag::Embedder>,
+    today: NaiveDate,
+) -> Result<ChatAnswer, ToolError> {
     let conv = Conversation::open(db)?;
     let route = router::route(question);
     if matches!(route, Route::Quantitative | Route::Undecided)
@@ -299,9 +346,24 @@ pub fn ask(db: &Db, question: &str, llm: Option<&dyn Llm>) -> Result<ChatAnswer,
     };
     match (route, llm) {
         (Route::Global, _) => Ok(global_answer(route)),
-        (Route::Retrieval, _) => retrieval_answer(db, &conv, question),
+        (Route::Retrieval, Some(llm)) => {
+            let Some(embedder) = embedder else {
+                return retrieval_answer(db, &conv, question, NoRag::Models);
+            };
+            if !rag::status(db, embedder.id())?.ready {
+                return retrieval_answer(db, &conv, question, NoRag::Index);
+            }
+            match rag::answer(db, &conv.authors, llm, embedder, question) {
+                Err(ToolError::Model(e)) => Ok(ChatAnswer::text_only(
+                    Route::Retrieval,
+                    format!("Não consegui responder: o modelo falhou ({e})."),
+                )),
+                other => other,
+            }
+        }
+        (Route::Retrieval, None) => retrieval_answer(db, &conv, question, NoRag::Models),
         (_, None) => Ok(not_understood(route, &conv.authors, None)),
-        (_, Some(llm)) => match llm_tool(llm, db, &conv, question) {
+        (_, Some(llm)) => match llm_tool(llm, db, &conv, question, today) {
             Ok(Some(call)) => {
                 let intent = intent::intent_for(&call, question);
                 calculate(db, &conv, call, &intent, Interpreter::Llm)

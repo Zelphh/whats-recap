@@ -225,6 +225,9 @@ export interface LlmInfo {
   runtime: boolean;
   gpu: LlmDevice | null;
   models: LlmModel[];
+  /** Modelo de busca das perguntas sobre o conteúdo (roda na CPU). */
+  embedder: LlmModel;
+  embedderLoaded: boolean;
   active: LlmActive | null;
   /** O que vai carregar na próxima pergunta livre. */
   next: LlmActive | null;
@@ -234,6 +237,32 @@ export interface LlmInfo {
 export interface LlmDownloadEvent {
   modelId: string;
   phase: "resume" | "download";
+  done: number;
+  total: number;
+}
+
+/** Índice de busca de uma conversa (perguntas sobre o conteúdo). */
+export interface RagIndexStatus {
+  /** Trechos no índice (0: nunca indexada). */
+  total: number;
+  /** Trechos já com vetor. */
+  embedded: number;
+  /** Indexada por inteiro: as perguntas sobre o conteúdo podem ser respondidas. */
+  ready: boolean;
+  /** Índice de uma versão antiga: será refeito. */
+  stale: boolean;
+}
+
+export interface RagInfo extends RagIndexStatus {
+  running: boolean;
+  busyElsewhere: boolean;
+  embedderDownloaded: boolean;
+  llmAvailable: boolean;
+  messageCount: number;
+}
+
+export interface RagProgressEvent {
+  id: string;
   done: number;
   total: number;
 }

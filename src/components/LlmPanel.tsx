@@ -21,7 +21,8 @@ function ModelRow({ m, info, progress, busy, onDownload, onCancel, onDelete }: {
   onDownload: () => void; onCancel: () => void; onDelete: () => void;
 }) {
   const recommended = m.id === info.models[0]?.id;
-  const fits = !info.gpu || info.gpu.freeMib >= m.minVramMib || info.active?.modelId === m.id;
+  const cpuOnly = m.minVramMib === 0;
+  const fits = cpuOnly || !info.gpu || info.gpu.freeMib >= m.minVramMib || info.active?.modelId === m.id;
   const p = progress?.modelId === m.id ? progress : null;
   return (
     <div className="llm-model">
@@ -31,8 +32,12 @@ function ModelRow({ m, info, progress, busy, onDownload, onCancel, onDelete }: {
             {m.name} {recommended && <span className="chip lime" style={{ fontSize: 12 }}>recomendado</span>}
           </div>
           <div className="setting-hint">
-            {fmtBytes(m.size)} · precisa de {fmtDec(m.minVramMib / 1024)} GB de memória de vídeo livre para rodar na GPU
-            {info.gpu && !fits && " (não cabe agora)"}
+            {cpuOnly
+              ? `${fmtBytes(m.size)} · roda na CPU · responde perguntas sobre o conteúdo (“quando a gente combinou…?”) depois de indexar a conversa no chat`
+              : <>
+                {fmtBytes(m.size)} · precisa de {fmtDec(m.minVramMib / 1024)} GB de memória de vídeo livre para rodar na GPU
+                {info.gpu && !fits && " (não cabe agora)"}
+              </>}
           </div>
         </div>
         <div className="llm-actions">
@@ -101,7 +106,8 @@ export function LlmPanel() {
     setProgress(null);
     last.current = null;
     // O download corre no backend; a lista mostra o progresso enquanto isso.
-    setInfo((i) => i && { ...i, models: i.models.map((x) => (x.id === m.id ? { ...x, downloading: true } : x)) });
+    const mark = (x: LlmModel) => (x.id === m.id ? { ...x, downloading: true } : x);
+    setInfo((i) => i && { ...i, models: i.models.map(mark), embedder: mark(i.embedder) });
     try {
       await api.llmDownload(m.id);
     } catch (e) {
@@ -148,6 +154,7 @@ export function LlmPanel() {
   }
 
   const anyDownloaded = info.models.some((m) => m.downloaded);
+  const anyDownloading = info.models.some((x) => x.downloading) || info.embedder.downloading;
   const status = !info.runtime
     ? "O llama-server não veio nesta instalação: o chat usa só as regras fixas."
     : info.status === "loading"
@@ -170,7 +177,7 @@ export function LlmPanel() {
             neste computador e vale para todas as conversas.
           </div>
         </div>
-        {info.active && <button className="btn sm" disabled={busy} onClick={stop}>Descarregar</button>}
+        {(info.active || info.embedderLoaded) && <button className="btn sm" disabled={busy} onClick={stop}>Descarregar</button>}
       </div>
 
       <div className="llm-status">
@@ -190,9 +197,12 @@ export function LlmPanel() {
       {info.runtime && (
         <div className="llm-models">
           {info.models.map((m) => (
-            <ModelRow key={m.id} m={m} info={info} progress={progress} busy={busy || info.models.some((x) => x.downloading)}
+            <ModelRow key={m.id} m={m} info={info} progress={progress} busy={busy || anyDownloading}
               onDownload={() => download(m)} onCancel={() => api.llmCancelDownload()} onDelete={() => remove(m)} />
           ))}
+          <ModelRow m={info.embedder} info={info} progress={progress} busy={busy || anyDownloading}
+            onDownload={() => download(info.embedder)} onCancel={() => api.llmCancelDownload()}
+            onDelete={() => remove(info.embedder)} />
         </div>
       )}
       {info.runtime && (

@@ -58,8 +58,43 @@ pub const QWEN35_4B: ModelSpec = ModelSpec {
 /// Em ordem de preferência.
 pub const MODELS: &[ModelSpec] = &[QWEN35_9B, QWEN35_4B];
 
+/// Embedder das perguntas sobre o conteúdo (chat tipo 2): multilingual-e5-small `Q8_0`. Roda na
+/// CPU (a GPU fica com o modelo de chat): ~2.400 tokens/s no Ryzen 7 5700X. No evals, a busca só
+/// vetorial com ele achou o trecho certo em primeiro lugar em 79% das perguntas (MRR 0,84).
+/// Pede os prefixos [`E5_QUERY`] e [`E5_PASSAGE`].
+pub const E5_SMALL: ModelSpec = ModelSpec {
+    id: "e5-small-q8",
+    name: "Busca por significado (e5-small)",
+    file: "multilingual-e5-small-q8_0.gguf",
+    url: "https://huggingface.co/TwinSunsLLC/multilingual-e5-small-gguf/resolve/main/multilingual-e5-small-q8_0.gguf",
+    size: 132_439_008,
+    sha256: "e011debc1208e31bf7b6aebee2d9fc8bd2ca11694a77ed66ac9d0c9d0a877c93",
+    // Contexto e lotes grandes: o e5 é bidirecional e cada texto precisa caber inteiro num lote.
+    args: &[
+        "--embedding",
+        "--pooling",
+        "mean",
+        "-c",
+        "8192",
+        "-b",
+        "8192",
+        "-ub",
+        "8192",
+        "-ngl",
+        "0",
+        "-dev",
+        "none",
+    ],
+    min_vram_mib: 0,
+};
+
+/// Prefixos do e5: a pergunta e os trechos são codificados de jeitos diferentes.
+pub const E5_QUERY: &str = "query: ";
+pub const E5_PASSAGE: &str = "passage: ";
+
+/// Modelos de chat ou o embedder.
 pub fn model(id: &str) -> Option<&'static ModelSpec> {
-    MODELS.iter().find(|m| m.id == id)
+    MODELS.iter().chain([&E5_SMALL]).find(|m| m.id == id)
 }
 
 /// Todas as camadas na GPU, 16k de contexto.

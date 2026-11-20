@@ -5,6 +5,7 @@
 //! 50 perguntas; era 73% antes dessas regras).
 
 use chrono::{Datelike, Months, NaiveDate};
+use regex::Regex;
 use serde_json::{Value, json};
 
 /// Schema da classificação da pergunta: `{"type": "quantitative" | "retrieval" | "global"}`.
@@ -112,15 +113,15 @@ pub fn tool_selection_prompt(
 
 Ferramentas:
 - count_word(word, author?, from?, to?): quantas vezes uma palavra ou expressão curta aparece, por pessoa.
-- messages_by_hour(author?, from?, to?): mensagens por hora do dia (0–23), por pessoa. Use para partes do dia (madrugada, manhã, tarde, noite, \"de dia\"), \"que horas\" e \"quem manda mais mensagem\".
+- messages_by_hour(author?, from?, to?): mensagens por hora do dia (0–23), por pessoa. Use para partes do dia (madrugada, manhã, tarde, noite, \"de dia\"), \"que horas\" e \"quem manda mais mensagem\" (\"quem fala mais\", \"quem é mais tagarela\").
 - messages_by_period(granularity, author?, from?, to?): mensagens por período. granularity: \"weekday\" para dia da semana, segunda a domingo, \"semana ou fim de semana\"; \"day\" para um dia do calendário; \"week\" para semanas do calendário (\"qual semana\", \"por semana\"); \"month\" para meses, épocas e estações do ano; \"year\" para anos.
 - first_occurrence(word, author?): a primeira mensagem com a palavra ou expressão.
 - response_time(author?, from?, to?): tempo de resposta (média e mediana) por pessoa.
-- list_messages(author?, from?, to?, hour_from?, hour_to?, word?): lista as mensagens de um filtro exato (\"quais foram as mensagens\", \"mostra as mensagens\", \"o que ela mandou das 7h às 8h\"). hour_from e hour_to são horas cheias, hour_to exclusiva: \"das 7h às 8h\" = 7 e 8; \"das 22h às 2h\" = 22 e 2; \"às 7h\" = 7 e 7; madrugada = 0 e 6, manhã = 6 e 12, tarde = 12 e 18, noite = 18 e 24. \"word\" só quando a pergunta pede mensagens com uma palavra.
+- list_messages(author?, from?, to?, hour_from?, hour_to?, word?): lista as mensagens de um filtro exato (\"quais foram as mensagens\", \"mostra as mensagens\", \"o que ela mandou das 7h às 8h\", \"o que ele mandou no Natal\"). hour_from e hour_to são horas cheias, hour_to exclusiva: \"das 7h às 8h\" = 7 e 8; \"das 22h às 2h\" = 22 e 2; \"às 7h\" = 7 e 7; madrugada = 0 e 6, manhã = 6 e 12, tarde = 12 e 18, noite = 18 e 24. \"word\" só quando a pergunta pede mensagens com uma palavra.
 
 Pessoas: {}. Preencha \"author\" só quando a pergunta for sobre UMA pessoa. Em comparações (\"quem...?\", \"X ou Y?\", \"eu ou ela?\", \"quem fala mais...\"), omita \"author\": as ferramentas já devolvem os números das duas.
 
-Datas: AAAA-MM-DD, inclusivas; omita \"from\" e \"to\" quando a pergunta não fala de período. Hoje é {today}. {}Outros períodos (meses, estações) também viram \"from\" e \"to\"; o verão vai de 21 de dezembro a 20 de março.
+Datas: AAAA-MM-DD, inclusivas; omita \"from\" e \"to\" quando a pergunta não fala de período. Hoje é {today}. {}Outros períodos (meses, estações, datas comemorativas) também viram \"from\" e \"to\"; o verão vai de 21 de dezembro a 20 de março; o Natal, 24 e 25 de dezembro.
 
 Em count_word e first_occurrence, \"word\" é só a palavra ou expressão procurada, sem aspas, como a pessoa escreveria. Se nenhuma ferramenta responde, use {{\"tool\":\"{NO_TOOL}\",\"args\":{{}}}}: brigas, sentimentos, assuntos, opiniões, contagem de mídia (figurinhas, áudios, fotos, vídeos) e categorias de palavras (palavrões, emojis em geral). Nunca troque uma categoria por uma palavra ou emoji de exemplo.
 
@@ -156,28 +157,93 @@ fn first_person_example(me: Option<&str>) -> String {
     json!({ "tool": "count_word", "args": args }).to_string()
 }
 
+/// Períodos relativos a hoje: o nome no prompt, como aparece na pergunta (minúsculas, sem
+/// acentos) e o intervalo.
+fn relative_periods(t: NaiveDate) -> [(&'static str, Regex, NaiveDate, NaiveDate); 5] {
+    let d = |y: i32, m: u32, day: u32| NaiveDate::from_ymd_opt(y, m, day).unwrap_or(t);
+    let month_start = d(t.year(), t.month(), 1);
+    let last_month_end = month_start.pred_opt().unwrap_or(t);
+    let year_ago = t.checked_sub_months(Months::new(12)).unwrap_or(t);
+    let re = |s: &str| Regex::new(&format!(r"\b(?:{s})\b")).unwrap();
+    [
+        ("\"este ano\"", re("n?es[st]e ano"), d(t.year(), 1, 1), t),
+        (
+            "\"ano passado\"",
+            re("ano passado"),
+            d(t.year() - 1, 1, 1),
+            d(t.year() - 1, 12, 31),
+        ),
+        ("\"este mês\"", re("n?es[st]e mes"), month_start, t),
+        (
+            "\"mês passado\"",
+            re("mes passado"),
+            d(last_month_end.year(), last_month_end.month(), 1),
+            last_month_end,
+        ),
+        (
+            "\"último ano\" ou \"últimos 12 meses\"",
+            re("ultimo ano|ultimos 12 meses|ultimos doze meses"),
+            year_ago,
+            t,
+        ),
+    ]
+}
+
 /// "ano passado = 2025-01-01 a 2025-12-31; …" a partir de `today` (vazio se a data for inválida).
 fn relative_dates(today: &str) -> String {
     let Ok(t) = NaiveDate::parse_from_str(today, "%Y-%m-%d") else {
         return String::new();
     };
-    let d = |y: i32, m: u32, day: u32| NaiveDate::from_ymd_opt(y, m, day).unwrap_or(t);
-    let month_start = d(t.year(), t.month(), 1);
-    let last_month_end = month_start.pred_opt().unwrap_or(t);
-    let year_ago = t.checked_sub_months(Months::new(12)).unwrap_or(t);
     let iso = |x: NaiveDate| x.format("%Y-%m-%d").to_string();
+    let list: Vec<String> = relative_periods(t)
+        .iter()
+        .map(|(name, _, from, to)| format!("{name} = {} a {}", iso(*from), iso(*to)))
+        .collect();
+    format!("Use estes intervalos: {}. ", list.join("; "))
+}
+
+/// O intervalo de um período relativo da pergunta ("ano passado", "este mês"), se for o único
+/// período citado: em "no Natal do ano passado", o ano inteiro estaria errado, e fica `None`.
+/// Rede de segurança para quando o modelo esquece as datas (o Qwen3.5 4B ignorava "no ano passado"
+/// em `response_time`).
+pub fn relative_range(question: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+    let q = crate::router::fold(question);
+    let mut hits = relative_periods(today)
+        .into_iter()
+        .filter(|(_, re, _, _)| re.is_match(&q));
+    let (_, re, from, to) = hits.next()?;
+    if hits.next().is_some() || crate::intent::has_relative_period(&re.replace_all(&q, " ")) {
+        return None;
+    }
+    Some((from, to))
+}
+
+/// Schema da resposta sobre o conteúdo (chat tipo 2), o do evals: achou ou não, a resposta e os ids
+/// das mensagens que a sustentam.
+pub fn rag_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "found": { "type": "boolean" },
+            "answer": { "type": "string", "maxLength": 400 },
+            "citations": { "type": "array", "items": { "type": "integer" }, "maxItems": 6 }
+        },
+        "required": ["found", "answer", "citations"],
+        "additionalProperties": false
+    })
+}
+
+/// Prompt de sistema da resposta sobre o conteúdo, com os trechos achados pela busca (o do evals:
+/// 94% de acerto no Qwen3.5, com citações válidas e recusa quando a resposta não está nos trechos).
+pub fn rag_prompt(a: &str, b: &str, context: &str) -> String {
     format!(
-        "Use estes intervalos: \"este ano\" = {} a {}; \"ano passado\" = {} a {}; \"este mês\" = {} a {}; \"mês passado\" = {} a {}; \"último ano\" ou \"últimos 12 meses\" = {} a {}. ",
-        iso(d(t.year(), 1, 1)),
-        iso(t),
-        iso(d(t.year() - 1, 1, 1)),
-        iso(d(t.year() - 1, 12, 31)),
-        iso(month_start),
-        iso(t),
-        iso(d(last_month_end.year(), last_month_end.month(), 1)),
-        iso(last_month_end),
-        iso(year_ago),
-        iso(t),
+        "Você responde perguntas sobre uma conversa de WhatsApp entre {a} e {b} usando SOMENTE os trechos abaixo. Cada linha é \"[id] data Pessoa: mensagem\".
+- Se a resposta estiver nos trechos: found = true, answer em português (uma ou duas frases, cite os ids no texto como #123) e citations com os ids das mensagens que sustentam a resposta.
+- Se não estiver: found = false, answer explica que não encontrou na conversa, citations = [].
+Nunca use conhecimento de fora nem invente detalhes.
+
+Trechos:
+{context}"
     )
 }
 
@@ -256,6 +322,24 @@ mod tests {
         assert!(p.contains("\"mês passado\" = 2026-02-01 a 2026-02-28"), "{p}");
         assert!(p.contains("\"últimos 12 meses\" = 2025-03-31 a 2026-03-31"), "{p}");
         assert!(!tool_selection_prompt(&[], None, "", "", "ontem").contains("ano passado\" ="));
+    }
+
+    #[test]
+    fn relative_range_only_when_unambiguous() {
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let today = d("2026-11-20");
+        let r = |q: &str| relative_range(q, today);
+        assert_eq!(
+            r("quanto tempo ela demora pra responder no ano passado?"),
+            Some((d("2025-01-01"), d("2025-12-31")))
+        );
+        assert_eq!(r("e nesse mês?"), Some((d("2026-11-01"), d("2026-11-20"))));
+        assert_eq!(r("mês passado"), Some((d("2026-10-01"), d("2026-10-31"))));
+        assert_eq!(r("nos últimos 12 meses"), Some((d("2025-11-20"), d("2026-11-20"))));
+        // O ano inteiro estaria errado: outro período junto.
+        assert_eq!(r("o que ela mandou no natal do ano passado?"), None);
+        assert_eq!(r("no verão passado"), None);
+        assert_eq!(r("quem responde mais rápido?"), None);
     }
 
     #[test]

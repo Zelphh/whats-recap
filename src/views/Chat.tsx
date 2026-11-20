@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { Dot, Icon } from "../components/ui";
 import { fmtDate, fmtInt, fmtTime } from "../format";
-import type { ChatAnswer, ImportSummary, ListFilter, LlmStatus, ToolCall } from "../types";
+import type { ChatAnswer, ImportSummary, ListFilter, LlmStatus, RagInfo, RagProgressEvent, ToolCall } from "../types";
 import type { Listing } from "./Viewer";
 
 export interface ChatTurn {
@@ -34,9 +35,115 @@ const GRANULARITY: Record<string, string> = {
 };
 
 const ROUTE_NOTE: Partial<Record<ChatAnswer["route"], string>> = {
-  retrieval: "Pergunta sobre o conteúdo · em breve",
+  retrieval: "Pergunta sobre o conteúdo",
   global: "Pergunta sobre a conversa inteira · fora do escopo",
 };
+
+/** "uns 3 minutos", "menos de um minuto". */
+function fmtEta(secs: number) {
+  if (secs < 60) return "menos de um minuto";
+  const min = Math.round(secs / 60);
+  return min === 1 ? "cerca de 1 minuto" : `cerca de ${fmtInt(min)} minutos`;
+}
+
+/**
+ * Perguntas sobre o conteúdo: o que falta (modelos, indexação) e o progresso da indexação, que
+ * roda em segundo plano e continua de onde parou se for interrompida.
+ */
+function RagCard({ id }: { id: string }) {
+  const [info, setInfo] = useState<RagInfo | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Início da medição da velocidade (para a estimativa de tempo).
+  const start = useRef<{ t: number; done: number } | null>(null);
+  const [eta, setEta] = useState<number | null>(null);
+
+  const refresh = useCallback(() => {
+    api.ragStatus(id).then(setInfo).catch((e) => setError(String(e)));
+  }, [id]);
+
+  useEffect(() => {
+    refresh();
+    const un = listen<RagProgressEvent>("rag-progress", (e) => {
+      if (e.payload.id !== id) return;
+      const { done, total } = e.payload;
+      setProgress({ done, total });
+      const now = performance.now();
+      if (!start.current) start.current = { t: now, done };
+      const s = start.current;
+      if (done > s.done && now - s.t > 3000) setEta(((total - done) * (now - s.t)) / 1000 / (done - s.done));
+    });
+    return () => { un.then((f) => f()); };
+  }, [id, refresh]);
+
+  async function run() {
+    setError(null);
+    setEta(null);
+    start.current = null;
+    setInfo((i) => i && { ...i, running: true });
+    try {
+      await api.ragIndex(id);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setProgress(null);
+      refresh();
+    }
+  }
+
+  if (!info) return null;
+  if (!info.llmAvailable || !info.embedderDownloaded) {
+    return (
+      <p className="note">
+        Para perguntas sobre o conteúdo (“quando a gente combinou a viagem?”), baixe o modelo de linguagem e a busca por
+        significado em <b>Configurações</b>.
+      </p>
+    );
+  }
+  if (info.ready && !info.running) {
+    return (
+      <p className="note">
+        Conversa indexada: perguntas sobre o conteúdo são respondidas pelo modelo a partir das mensagens, com citações.
+      </p>
+    );
+  }
+  const done = progress?.done ?? info.embedded;
+  const total = progress?.total ?? info.total;
+  const started = total > 0 && !info.stale;
+  return (
+    <div className="card soft rag-card">
+      <div className="spread" style={{ alignItems: "flex-start" }}>
+        <div>
+          <div className="label">Perguntas sobre o conteúdo</div>
+          <p className="note">
+            {info.running
+              ? "Indexando a conversa… pode usar o app enquanto isso; as contagens continuam funcionando."
+              : started
+                ? `Indexação pausada em ${Math.floor((100 * done) / total)}%. Continua de onde parou.`
+                : `Para responder perguntas como “o que ela disse sobre o emprego novo?”, a conversa precisa ser indexada uma vez (${fmtInt(info.messageCount)} mensagens; leva cerca de 1 minuto a cada 10 mil, na CPU).`}
+          </p>
+        </div>
+        {info.running ? (
+          <button className="btn sm" onClick={() => api.ragCancel()}>Pausar</button>
+        ) : (
+          <button className="btn sm primary" disabled={info.busyElsewhere} onClick={run}
+            title={info.busyElsewhere ? "Outra conversa está sendo indexada." : undefined}>
+            {started ? "Continuar" : "Indexar conversa"}
+          </button>
+        )}
+      </div>
+      {(info.running || started) && (
+        <div className="llm-progress" role="status">
+          <div className="meter"><div style={{ width: `${total ? (100 * done) / total : 0}%` }} /></div>
+          <span className="note">
+            {fmtInt(done)} de {fmtInt(total)} trechos{info.running && eta != null ? ` · falta ${fmtEta(eta)}` : ""}
+          </span>
+        </div>
+      )}
+      {error && <div className="error-box" role="alert">{error}</div>}
+    </div>
+  );
+}
 
 // Depois disso sem resposta, a pergunta provavelmente foi para o modelo (as regras respondem em ms).
 const SLOW_MS = 700;
@@ -157,9 +264,10 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage, onOpenListin
             <div className="kicker">pergunte sobre a conversa</div>
             <h1 className="title">Chat</h1>
             <p className="lead">
-              Pergunte sobre números da conversa entre {summary.authors.join(" e ")}. As respostas são calculadas a partir
-              das mensagens; nada sai do seu computador.
+              Pergunte sobre a conversa entre {summary.authors.join(" e ")}: números são calculados a partir das
+              mensagens, e perguntas sobre o conteúdo são respondidas com as mensagens citadas. Nada sai do seu computador.
             </p>
+            <RagCard id={id} />
           </div>
 
           {turns.length === 0 && (
@@ -169,8 +277,8 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage, onOpenListin
                 {examples.map((ex) => <button key={ex} onClick={() => ask(ex)}>{ex}</button>)}
               </div>
               <p className="note">
-                Por enquanto o chat entende perguntas de contagem (quantas vezes, quem mais, qual mês, horários, tempo de
-                resposta). Perguntas sobre o conteúdo e perguntas livres chegam com o modelo de linguagem.
+                As regras fixas entendem perguntas de contagem (quantas vezes, quem mais, qual mês, horários, tempo de
+                resposta). Perguntas em outras palavras e sobre o conteúdo usam o modelo de linguagem.
               </p>
               {llm === "off" && (
                 <p className="note">
@@ -216,6 +324,13 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage, onOpenListin
                     </button>
                   )}
                   {t.answer.tool && <HowCalculated tool={t.answer.tool} by={t.answer.interpretedBy} />}
+                  {t.answer.route === "retrieval" && t.answer.interpretedBy === "llm" && (
+                    <div className="how">
+                      <span title="O modelo leu só os trechos da conversa mais parecidos com a pergunta; as citações foram conferidas.">
+                        respondido pelo modelo a partir dos trechos mais parecidos com a pergunta
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

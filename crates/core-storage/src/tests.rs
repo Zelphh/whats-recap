@@ -160,3 +160,31 @@ fn migrates_v1_database() {
     assert_eq!(db.media_map().unwrap()["STK-1.webp"], row);
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[test]
+fn chunks_keep_vectors_and_resume() {
+    let dir = tmp("chunks");
+    let (mut db, _) = import(&dir, CHAT).unwrap();
+    db.replace_chunks(&[(1, 3), (3, 4), (5, 5)]).unwrap();
+    assert_eq!(db.chunk_counts().unwrap(), (3, 0));
+    let pending = db.pending_chunks(2).unwrap();
+    assert_eq!(
+        pending.iter().map(|c| (c.start_id, c.end_id)).collect::<Vec<_>>(),
+        [(1, 3), (3, 4)]
+    );
+
+    db.set_chunk_embeddings(&[(pending[0].id, vec![0.5, -1.25])]).unwrap();
+    assert_eq!(db.chunk_counts().unwrap(), (3, 1));
+    // Retoma pelos que faltam.
+    assert_eq!(db.pending_chunks(10).unwrap()[0].start_id, 3);
+    let mut seen = Vec::new();
+    db.for_each_chunk_vector(|c, v| seen.push((c.start_id, v.to_vec())))
+        .unwrap();
+    assert_eq!(seen, [(1, vec![0.5, -1.25])]);
+
+    // Trocar os trechos apaga os vetores antigos.
+    db.replace_chunks(&[(1, 5)]).unwrap();
+    assert_eq!(db.chunk_counts().unwrap(), (1, 0));
+    drop(db);
+    std::fs::remove_dir_all(dir).ok();
+}
