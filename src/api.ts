@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  ChatAnswer, ConversationInfo, ImportSummary, ListFilter, LlmInfo, LlmStatus, MessageRow, RagIndexStatus, RagInfo, Stats,
+  ChatAnswer, ConversationInfo, ImportSummary, ListFilter, LlmInfo, LlmStatus, MessageRow, PreviousTurn, RagIndexStatus, RagInfo, Stats,
   StatsSettings,
 } from "./types";
 
@@ -21,7 +21,8 @@ export const api = {
     invoke<MessageRow[]>("search_messages", { id, query, limit }),
   listMessages: (id: string, filter: ListFilter, limit = 1000) =>
     invoke<MessageRow[]>("list_messages", { id, filter, limit }),
-  chatAsk: (id: string, question: string) => invoke<ChatAnswer>("chat_ask", { id, question }),
+  chatAsk: (id: string, question: string, previous: PreviousTurn | null) =>
+    invoke<ChatAnswer>("chat_ask", { id, question, previous }),
   chatExamples: (id: string) => invoke<string[]>("chat_examples", { id }),
   getChatMe: (id: string) => invoke<string | null>("get_chat_me", { id }),
   setChatMe: (id: string, me: string | null) => invoke<void>("set_chat_me", { id, me }),

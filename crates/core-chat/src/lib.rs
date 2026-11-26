@@ -24,14 +24,14 @@ pub use tools::{Conversation, Granularity, ListFilter, ToolCall, ToolError, Tool
 
 use chrono::NaiveDate;
 use core_storage::{Db, MessageRow};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Quantos trechos sugerir quando a pergunta é sobre o conteúdo.
 const RETRIEVAL_HINTS: i64 = 5;
 
 /// Palavras da estrutura da pergunta ("o que a gente falou sobre…"), que não ajudam a achar o assunto.
-const QUESTION_WORDS: &[&str] = &[
+pub(crate) const QUESTION_WORDS: &[&str] = &[
     "falou",
     "falei",
     "falamos",
@@ -105,6 +105,20 @@ pub struct ChatAnswer {
     pub interpreted_by: Option<Interpreter>,
     /// Mensagens citadas (clicáveis no visualizador).
     pub citations: Vec<MessageRow>,
+    /// Respondida como continuação da pergunta anterior ("e depois?").
+    pub followup: bool,
+}
+
+/// A pergunta anterior do chat e o que foi respondido, para entender continuações ("e depois?").
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviousTurn {
+    pub question: String,
+    pub route: Route,
+    pub answer: String,
+    /// Ids das mensagens citadas na resposta.
+    #[serde(default)]
+    pub citations: Vec<i64>,
 }
 
 impl ChatAnswer {
@@ -116,6 +130,7 @@ impl ChatAnswer {
             result: None,
             interpreted_by: None,
             citations: Vec::new(),
+            followup: false,
         }
     }
 }
@@ -182,13 +197,7 @@ enum NoRag {
 
 fn retrieval_answer(db: &Db, conv: &Conversation, question: &str, why: NoRag) -> Result<ChatAnswer, ToolError> {
     // Sem o RAG, sugere mensagens com as palavras da pergunta.
-    let mut stop = conv.settings.stopwords.clone();
-    stop.extend(QUESTION_WORDS.iter().map(|w| w.to_string()));
-    let terms: Vec<String> = core_stats::text::Normalizer::new(&stop, false)
-        .content_words(question)
-        .filter(|w| w.chars().count() >= 3)
-        .collect();
-    let citations = db.search_any(&terms, RETRIEVAL_HINTS)?;
+    let citations = db.search_any(&rag::keywords(conv, question), RETRIEVAL_HINTS)?;
     let intro = match why {
         NoRag::Models => {
             "Perguntas sobre o conteúdo precisam do modelo de linguagem e da busca por significado \
@@ -244,6 +253,7 @@ fn calculate(
         result: Some(result),
         interpreted_by: Some(by),
         citations,
+        followup: false,
     })
 }
 
@@ -330,6 +340,20 @@ pub fn ask_with(
     embedder: Option<&dyn rag::Embedder>,
     today: NaiveDate,
 ) -> Result<ChatAnswer, ToolError> {
+    ask_after(db, question, None, llm, embedder, today)
+}
+
+/// [`ask_with`] sabendo a pergunta anterior: se ela foi sobre o conteúdo e esta parece continuá-la
+/// ("e depois?", "por quê?", "quando foi isso?"), esta também vai para o RAG, com a anterior junto.
+/// Continuações de contagens ("e ela?") ainda não são entendidas.
+pub fn ask_after(
+    db: &Db,
+    question: &str,
+    previous: Option<&PreviousTurn>,
+    llm: Option<&dyn Llm>,
+    embedder: Option<&dyn rag::Embedder>,
+    today: NaiveDate,
+) -> Result<ChatAnswer, ToolError> {
     let conv = Conversation::open(db)?;
     let route = router::route(question);
     if matches!(route, Route::Quantitative | Route::Undecided)
@@ -337,6 +361,11 @@ pub fn ask_with(
     {
         return calculate(db, &conv, call, &intent, Interpreter::Heuristic);
     }
+    let previous = previous
+        // As regras fixas já tentaram: "e quantas vezes ela falou isso?" que elas não entendem vira conteúdo.
+        .filter(|p| p.route == Route::Retrieval)
+        .filter(|_| router::is_followup(&router::fold(question)));
+    let route = if previous.is_some() { Route::Retrieval } else { route };
     let route = match (route, llm) {
         (Route::Undecided, Some(llm)) => match llm_route(llm, question) {
             Ok(r) => r,
@@ -353,11 +382,15 @@ pub fn ask_with(
             if !rag::status(db, embedder.id())?.ready {
                 return retrieval_answer(db, &conv, question, NoRag::Index);
             }
-            match rag::answer(db, &conv.authors, llm, embedder, question) {
+            match rag::answer(db, &conv, llm, embedder, question, previous, today) {
                 Err(ToolError::Model(e)) => Ok(ChatAnswer::text_only(
                     Route::Retrieval,
                     format!("Não consegui responder: o modelo falhou ({e})."),
                 )),
+                Ok(a) => Ok(ChatAnswer {
+                    followup: previous.is_some(),
+                    ..a
+                }),
                 other => other,
             }
         }

@@ -774,3 +774,63 @@ fn content_answers_without_valid_citations_are_refused() {
         assert!(a.text.contains("conexão recusada"), "{}", a.text);
     });
 }
+
+#[test]
+fn followups_continue_the_previous_content_question() {
+    with_chat(CHAT, |db| {
+        let e = FakeEmbedder::new();
+        index_all(db, &e);
+        let today = NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
+        let previous = PreviousTurn {
+            question: "o que ela disse sobre a viagem?".into(),
+            route: Route::Retrieval,
+            answer: "Ela disse que sentia saudade da viagem (#7).".into(),
+            citations: vec![7],
+        };
+        let fake = FakeLlm::new(
+            "quantitative",
+            json!({ "found": true, "answer": "Depois ela disse que o amava (#9).", "citations": [9] }),
+        );
+        let a = ask_after(db, "e depois?", Some(&previous), Some(&fake), Some(&e), today).unwrap();
+        assert_eq!((a.route, a.followup), (Route::Retrieval, true));
+        assert_eq!(a.citations.iter().map(|m| m.id).collect::<Vec<_>>(), [9]);
+        let calls = fake.calls.borrow();
+        assert_eq!(calls.len(), 1, "sem passar pelo roteador");
+        let (system, user, _) = &calls[0];
+        assert!(
+            user.starts_with("Pergunta anterior: o que ela disse sobre a viagem?"),
+            "{user}"
+        );
+        assert!(user.ends_with("e depois?"), "{user}");
+        // As mensagens depois da citação anterior entram no contexto.
+        assert!(system.contains("[9] 2024-03-15 Ana Souza: te amo muito"), "{system}");
+        drop(calls);
+
+        // Depois de uma contagem, "e depois?" não é continuação de conteúdo: vai para o roteador.
+        let counted = PreviousTurn {
+            route: Route::Quantitative,
+            ..previous.clone()
+        };
+        let fake = FakeLlm::new("global", json!({}));
+        let a = ask_after(db, "e depois?", Some(&counted), Some(&fake), Some(&e), today).unwrap();
+        assert!(!a.followup);
+        assert_eq!(fake.calls.borrow()[0].0, llm::router_prompt());
+
+        // Uma pergunta nova e completa não é continuação.
+        let fake = FakeLlm::new(
+            "retrieval",
+            json!({ "found": false, "answer": "Não encontrei isso na conversa.", "citations": [] }),
+        );
+        let a = ask_after(
+            db,
+            "o que a gente falou sobre Floripa?",
+            Some(&previous),
+            Some(&fake),
+            Some(&e),
+            today,
+        )
+        .unwrap();
+        assert!(!a.followup);
+        assert!(!fake.calls.borrow()[0].1.contains("Pergunta anterior"));
+    });
+}

@@ -300,9 +300,15 @@ async fn locate_date(app: AppHandle, id: String, date: String) -> CmdResult<Opti
 }
 
 /// Pergunta ao chat: contagens (tipo 1) ou conteúdo (tipo 2, com a conversa indexada). A resposta
-/// traz o texto, a ferramenta usada e as citações.
+/// traz o texto, a ferramenta usada e as citações. `previous` (a última pergunta respondida) deixa
+/// o chat entender continuações como "e depois?".
 #[tauri::command]
-async fn chat_ask(app: AppHandle, id: String, question: String) -> CmdResult<core_chat::ChatAnswer> {
+async fn chat_ask(
+    app: AppHandle,
+    id: String,
+    question: String,
+    previous: Option<core_chat::PreviousTurn>,
+) -> CmdResult<core_chat::ChatAnswer> {
     blocking(move || {
         let db = open(&app, &id)?;
         let state = app.state::<LlmState>();
@@ -314,9 +320,10 @@ async fn chat_ask(app: AppHandle, id: String, question: String) -> CmdResult<cor
             state: state.inner(),
             app: app.clone(),
         });
-        core_chat::ask_with(
+        core_chat::ask_after(
             &db,
             &question,
+            previous.as_ref(),
             llm.as_ref().map(|l| l as &dyn core_chat::Llm),
             embedder.as_ref().map(|e| e as &dyn core_chat::rag::Embedder),
             chrono::Local::now().date_naive(),

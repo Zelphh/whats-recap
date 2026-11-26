@@ -42,9 +42,52 @@ static RETRIEVAL_RE: LazyLock<Regex> = LazyLock::new(|| {
 // "quanto custou o conserto?", "quantos anos a mãe dela fez?": valores ditos na conversa, não
 // contagens de mensagens (o "quant" casaria com `QUANT_RE`).
 static CONTENT_AMOUNT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(quant[oa]s? (custou|custa|custaram|deu|ficou|ficaram|pag\w*|cobr\w*|gast\w*)|quantos anos)\b")
-        .unwrap()
+    Regex::new(
+        r"\b(quant[oa]s? (custou|custa|custaram|deu|ficou|ficaram|pag\w*|cobr\w*|gast\w*)|quant[oa] (foi|era|sai|saiu)|quantos anos)\b",
+    )
+    .unwrap()
 });
+
+// Continuação da pergunta anterior: "e depois?", "mas por quê?", "quando foi isso?", "e ela
+// respondeu o quê?". Começa com "e"/"mas"/"então"/"aí" ou aponta para o que já foi dito ("isso").
+// "depois" no meio da frase não basta: "de quanto ficou o aluguel depois da negociação?".
+static FOLLOWUP_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(e|mas|entao|ai|tipo)\b|\b(isso|disso|nisso|daquilo|naquilo)\b").unwrap());
+static AFTER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(depois|dai|em seguida|e ai|e entao|o que aconteceu|respond\w*)\b").unwrap());
+static BEFORE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(antes|por que|porque|como comecou)\b").unwrap());
+
+/// Palavras de uma continuação, no máximo ("e o que ela respondeu depois disso?" tem 8).
+const FOLLOWUP_WORDS: usize = 8;
+
+/// A pergunta (já em [`fold`]) parece continuar a anterior: curta e com "e…", "isso", "depois"…, ou
+/// de no máximo duas palavras ("por quê?", "quando?").
+pub fn is_followup(q: &str) -> bool {
+    let words = q
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .count();
+    words > 0 && (words <= 2 || (words <= FOLLOWUP_WORDS && FOLLOWUP_RE.is_match(q.trim_start())))
+}
+
+/// Para que lado da resposta anterior a continuação olha.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// "e depois?", "o que ela respondeu?"
+    After,
+    /// "e antes disso?", "por quê?"
+    Before,
+}
+
+pub fn followup_direction(q: &str) -> Option<Direction> {
+    if AFTER_RE.is_match(q) {
+        Some(Direction::After)
+    } else if BEFORE_RE.is_match(q) {
+        Some(Direction::Before)
+    } else {
+        None
+    }
+}
 
 /// Minúsculas e sem acentos: a forma usada por todas as heurísticas.
 pub fn fold(s: &str) -> String {
@@ -96,6 +139,7 @@ mod tests {
             "quanto custou o conserto do carro?",
             "quantos anos a mãe da Ana fez?",
             "de quanto ficou o aluguel depois da negociação?",
+            "e quanto foi a consulta?",
         ] {
             assert_eq!(route(q), Route::Retrieval, "{q}");
         }
@@ -107,5 +151,37 @@ mod tests {
             assert_eq!(route(q), Route::Global, "{q}");
         }
         assert_eq!(route("oi"), Route::Undecided);
+    }
+
+    #[test]
+    fn followups() {
+        for q in [
+            "e depois?",
+            "por quê?",
+            "quando?",
+            "e ela respondeu o quê?",
+            "mas por que ela disse isso?",
+            "quando foi isso?",
+            "e antes disso, o que tinha acontecido?",
+        ] {
+            assert!(is_followup(&fold(q)), "{q}");
+        }
+        for q in [
+            "o que a Ana disse sobre o emprego novo?",
+            "quantas vezes ele falou amor?",
+            "qual o nome do restaurante japonês que o Rafa indicou?",
+            "e se a gente fosse lembrar de tudo o que aconteceu naquele ano todo?",
+            "de quanto ficou o aluguel depois da negociação?",
+            "o que ela falou antes da viagem?",
+        ] {
+            assert!(!is_followup(&fold(q)), "{q}");
+        }
+        assert_eq!(followup_direction(&fold("e depois?")), Some(Direction::After));
+        assert_eq!(
+            followup_direction(&fold("e ela respondeu o quê?")),
+            Some(Direction::After)
+        );
+        assert_eq!(followup_direction(&fold("por quê?")), Some(Direction::Before));
+        assert_eq!(followup_direction(&fold("quando foi isso?")), None);
     }
 }

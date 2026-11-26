@@ -11,7 +11,8 @@
 //!    fora do contexto são descartadas e, sem nenhuma válida, a resposta é recusada.
 
 use crate::llm;
-use crate::{ChatAnswer, Interpreter, Llm, Route, ToolError};
+use crate::{ChatAnswer, Interpreter, Llm, PreviousTurn, Route, ToolError};
+use chrono::NaiveDate;
 use core_storage::{ChunkRow, Db, MessageRow};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -31,16 +32,30 @@ const META_KEY: &str = "rag_index";
 
 /// Pausa que separa dois assuntos: um trecho nunca atravessa uma pausa maior que esta.
 const GAP_SECS: i64 = 60 * 60;
-/// Tamanho do trecho. As janelas do evals tinham ~7 mensagens; com 12 e sobreposição de 2, uma
-/// combinação dita em 3–4 mensagens quase sempre cabe inteira em algum trecho.
-pub const WINDOW_MESSAGES: usize = 12;
-const OVERLAP: usize = 2;
-/// O e5 lê até 512 tokens: ~1.000 caracteres em português, com folga.
-const WINDOW_CHARS: usize = 1000;
 const MESSAGE_CHARS: usize = 300;
+
+/// Forma dos trechos: até `messages` mensagens e `chars` caracteres, com `overlap` mensagens em
+/// comum entre trechos vizinhos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChunkParams {
+    pub messages: usize,
+    pub overlap: usize,
+    pub chars: usize,
+}
+
+/// Trechos do app. As janelas do evals tinham ~7 mensagens; com 12 e sobreposição de 2, uma
+/// combinação dita em 3–4 mensagens quase sempre cabe inteira em algum trecho. O e5 lê até 512
+/// tokens: ~1.000 caracteres em português, com folga. Trechos de 8 e 6 mensagens não acharam mais
+/// no example `busca` (MRR 0,63–0,64 × 0,62, com o filtro de datas) e indexam 1,6–1,9× mais trechos.
+pub const CHUNKS: ChunkParams = ChunkParams {
+    messages: 12,
+    overlap: 2,
+    chars: 1000,
+};
 /// Trechos por chamada ao embedder.
 const BATCH: usize = 32;
-/// Trechos que vão para o LLM (como no evals).
+/// Trechos que vão para o LLM (como no evals). No example `busca`, os acertos depois do 5º só
+/// voltavam a aparecer além do 10º, e o contexto não comporta muito mais que 5 trechos de 12.
 pub const TOP_K: usize = 5;
 /// Limite do contexto do LLM (~2.000 tokens): cabe no slot de 2.730 tokens da CPU com a resposta.
 const CONTEXT_CHARS: usize = 7000;
@@ -50,6 +65,13 @@ const ANSWER_MAX_TOKENS: u32 = 300;
 struct IndexMeta {
     version: u32,
     embedder: String,
+    /// Índices anteriores a este campo foram feitos com [`CHUNKS`].
+    #[serde(default = "default_chunks")]
+    chunks: ChunkParams,
+}
+
+fn default_chunks() -> ChunkParams {
+    CHUNKS
 }
 
 /// Situação do índice de uma conversa.
@@ -66,17 +88,23 @@ pub struct IndexStatus {
     pub stale: bool,
 }
 
-fn current_meta(embedder_id: &str) -> IndexMeta {
+fn current_meta(embedder_id: &str, chunks: ChunkParams) -> IndexMeta {
     IndexMeta {
         version: INDEX_VERSION,
         embedder: embedder_id.to_string(),
+        chunks,
     }
 }
 
 pub fn status(db: &Db, embedder_id: &str) -> Result<IndexStatus, ToolError> {
+    status_with(db, embedder_id, CHUNKS)
+}
+
+/// [`status`] de um índice com outra forma de trecho (o example `busca` compara formas).
+pub fn status_with(db: &Db, embedder_id: &str, chunks: ChunkParams) -> Result<IndexStatus, ToolError> {
     let (total, embedded) = db.chunk_counts()?;
     let meta: Option<IndexMeta> = db.meta_get(META_KEY)?;
-    let stale = total > 0 && meta.as_ref() != Some(&current_meta(embedder_id));
+    let stale = total > 0 && meta.as_ref() != Some(&current_meta(embedder_id, chunks));
     Ok(IndexStatus {
         total,
         embedded,
@@ -97,10 +125,14 @@ fn clip(s: &str, max: usize) -> &str {
     }
 }
 
-/// Trechos `(primeira, última)` mensagem: janelas de até [`WINDOW_MESSAGES`] mensagens e
-/// [`WINDOW_CHARS`] caracteres, que não atravessam pausas de [`GAP_SECS`] e se sobrepõem em
-/// [`OVERLAP`] mensagens.
+/// Trechos `(primeira, última)` mensagem no formato do app ([`CHUNKS`]).
 pub fn plan_chunks(db: &Db) -> Result<Vec<(i64, i64)>, ToolError> {
+    plan_chunks_with(db, CHUNKS)
+}
+
+/// Trechos `(primeira, última)` mensagem: janelas de até `p.messages` mensagens e `p.chars`
+/// caracteres, que não atravessam pausas de [`GAP_SECS`] e se sobrepõem em `p.overlap` mensagens.
+pub fn plan_chunks_with(db: &Db, p: ChunkParams) -> Result<Vec<(i64, i64)>, ToolError> {
     // (id, ts, caracteres) das mensagens indexáveis, em blocos separados pelas pausas.
     let mut blocks: Vec<Vec<(i64, usize)>> = Vec::new();
     let mut last_ts = i64::MIN;
@@ -121,8 +153,7 @@ pub fn plan_chunks(db: &Db) -> Result<Vec<(i64, i64)>, ToolError> {
         while start < block.len() {
             let mut end = start;
             let mut chars = block[start].1;
-            while end + 1 < block.len() && end + 1 - start < WINDOW_MESSAGES && chars + block[end + 1].1 <= WINDOW_CHARS
-            {
+            while end + 1 < block.len() && end + 1 - start < p.messages && chars + block[end + 1].1 <= p.chars {
                 end += 1;
                 chars += block[end].1;
             }
@@ -131,7 +162,7 @@ pub fn plan_chunks(db: &Db) -> Result<Vec<(i64, i64)>, ToolError> {
                 break;
             }
             // Recua a sobreposição, mas sempre avança.
-            start = (end + 1).saturating_sub(OVERLAP).max(start + 1);
+            start = (end + 1).saturating_sub(p.overlap).max(start + 1);
         }
     }
     Ok(out)
@@ -151,7 +182,7 @@ fn chunk_messages(db: &Db, start_id: i64, end_id: i64) -> Result<Vec<MessageRow>
 
 /// Texto do trecho para o embedder: a data uma vez e "Pessoa: mensagem" por linha (sem os ids e a
 /// data em cada linha, que só gastariam tokens do limite de 512 do e5).
-fn passage(rows: &[MessageRow]) -> String {
+fn passage(rows: &[MessageRow], max_chars: usize) -> String {
     let mut text = format!(
         "{}{}",
         core_llm_prefix::PASSAGE,
@@ -163,7 +194,7 @@ fn passage(rows: &[MessageRow]) -> String {
             "\n{author}: {}",
             clip(m.text.as_deref().unwrap_or_default().trim(), MESSAGE_CHARS)
         );
-        if text.chars().count() + line.chars().count() > WINDOW_CHARS + 40 {
+        if text.chars().count() + line.chars().count() > max_chars + 40 {
             break;
         }
         text.push_str(&line);
@@ -188,12 +219,23 @@ pub fn index(
     cancel: &AtomicBool,
     progress: Progress,
 ) -> Result<IndexStatus, ToolError> {
+    index_with(db, embedder, CHUNKS, cancel, progress)
+}
+
+/// [`index`] com outra forma de trecho.
+pub fn index_with(
+    db: &mut Db,
+    embedder: &dyn Embedder,
+    params: ChunkParams,
+    cancel: &AtomicBool,
+    progress: Progress,
+) -> Result<IndexStatus, ToolError> {
     let embedder_id = embedder.id();
-    let st = status(db, embedder_id)?;
+    let st = status_with(db, embedder_id, params)?;
     if st.total == 0 || st.stale {
-        let chunks = plan_chunks(db)?;
+        let chunks = plan_chunks_with(db, params)?;
         db.replace_chunks(&chunks)?;
-        db.meta_set(META_KEY, &current_meta(embedder_id))?;
+        db.meta_set(META_KEY, &current_meta(embedder_id, params))?;
     }
     let (total, mut embedded) = db.chunk_counts()?;
     progress(embedded, total);
@@ -204,7 +246,7 @@ pub fn index(
         }
         let mut texts = Vec::with_capacity(pending.len());
         for c in &pending {
-            texts.push(passage(&chunk_messages(db, c.start_id, c.end_id)?));
+            texts.push(passage(&chunk_messages(db, c.start_id, c.end_id)?, params.chars));
         }
         let vectors = embedder.embed(&texts).map_err(ToolError::Model)?;
         if vectors.len() != pending.len() {
@@ -219,40 +261,169 @@ pub fn index(
         embedded += items.len() as i64;
         progress(embedded, total);
     }
-    status(db, embedder_id)
+    status_with(db, embedder_id, params)
 }
 
 /// Um trecho achado pela busca.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hit {
     pub chunk: ChunkRow,
+    /// Cosseno com a pergunta.
     pub score: f32,
 }
 
-/// Os `k` trechos mais parecidos com a pergunta, do mais para o menos parecido.
+/// Como buscar os trechos.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SearchOptions {
+    /// Trechos devolvidos.
+    pub k: usize,
+    /// Só trechos neste intervalo de datas. Se nenhum trecho cair nele, o filtro é ignorado.
+    pub range: Option<(NaiveDate, NaiveDate)>,
+    /// Palavras para a busca por palavras (FTS5, bm25). Vazio: só vetorial. Com palavras, as duas
+    /// ordens são combinadas por Reciprocal Rank Fusion.
+    pub keywords: Vec<String>,
+}
+
+/// Folga do filtro de datas: "o filme que vimos em julho" pode ter sido comentado dias depois.
+const DATE_SLACK_DAYS: u64 = 7;
+/// Combina a busca vetorial com a busca por palavras. Desligada: no example `busca` (2026-11-25,
+/// 188 mil mensagens), a híbrida piorou o recall@5 em todas as formas de trecho (palavras comuns
+/// da pergunta puxam trechos errados), como já tinha acontecido no evals.
+pub const HYBRID: bool = false;
+
+/// Palavras de conteúdo da pergunta (sem as palavras vazias da conversa nem as da estrutura da
+/// pergunta, como "falou" e "sobre"), com 3 letras ou mais.
+pub fn keywords(conv: &crate::Conversation, question: &str) -> Vec<String> {
+    let mut stop = conv.settings.stopwords.clone();
+    stop.extend(crate::QUESTION_WORDS.iter().map(|w| w.to_string()));
+    core_stats::text::Normalizer::new(&stop, false)
+        .content_words(question)
+        .filter(|w| w.chars().count() >= 3)
+        .collect()
+}
+
+/// Período citado na pergunta ("em julho de 2023", "no ano passado"), com folga.
+pub fn question_range(question: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+    let range = match crate::intent::date_range(&crate::router::fold(question)) {
+        (Some(from), Some(to)) => Some((from, to)),
+        _ => llm::relative_range(question, today),
+    };
+    range.map(|(from, to)| {
+        (
+            from - chrono::Days::new(DATE_SLACK_DAYS),
+            to + chrono::Days::new(DATE_SLACK_DAYS),
+        )
+    })
+}
+
+/// Opções de busca do app para a pergunta.
+pub fn options_for(conv: &crate::Conversation, question: &str, today: NaiveDate) -> SearchOptions {
+    SearchOptions {
+        k: TOP_K,
+        range: question_range(question, today),
+        keywords: if HYBRID { keywords(conv, question) } else { Vec::new() },
+    }
+}
+
+/// Mensagens que o FTS olha para ordenar os trechos por palavras.
+const FTS_MESSAGES: i64 = 500;
+/// Constante do Reciprocal Rank Fusion (a usual; a mesma do evals).
+const RRF_K: f32 = 60.0;
+
+/// Os `k` trechos mais parecidos com a pergunta, do mais para o menos parecido (só vetorial).
 pub fn search(db: &Db, embedder: &dyn Embedder, question: &str, k: usize) -> Result<Vec<Hit>, ToolError> {
+    let opt = SearchOptions {
+        k,
+        ..Default::default()
+    };
+    search_with(db, embedder, question, &opt)
+}
+
+/// Primeiro id de mensagem do dia `d` em diante (os ids seguem a ordem do tempo).
+fn first_id_from(db: &Db, d: NaiveDate) -> Result<i64, ToolError> {
+    let ts = d.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc().timestamp();
+    Ok(db.first_id_at_or_after(ts)?.unwrap_or(i64::MAX))
+}
+
+/// Busca vetorial com filtro de datas e, se houver palavras, combinada com a busca por palavras.
+pub fn search_with(
+    db: &Db,
+    embedder: &dyn Embedder,
+    question: &str,
+    opt: &SearchOptions,
+) -> Result<Vec<Hit>, ToolError> {
     let q = format!("{}{}", core_llm_prefix::QUERY, question.trim());
     let qv = embedder
         .embed(&[q])
         .map_err(ToolError::Model)?
         .pop()
         .ok_or_else(|| ToolError::Model("o embedder não devolveu vetor".into()))?;
-    let mut hits: Vec<Hit> = Vec::new();
+    let ids = match opt.range {
+        Some((from, to)) => Some((first_id_from(db, from)?, first_id_from(db, to + chrono::Days::new(1))?)),
+        None => None,
+    };
+    let mut all: Vec<Hit> = Vec::new();
+    let mut in_range: Vec<Hit> = Vec::new();
     db.for_each_chunk_vector(|chunk, v| {
-        let score: f32 = qv.iter().zip(v).map(|(a, b)| a * b).sum();
-        if hits.len() < k || hits.last().is_some_and(|h| score > h.score) {
-            let pos = hits.partition_point(|h| h.score >= score);
-            hits.insert(pos, Hit { chunk, score });
-            hits.truncate(k);
+        let hit = Hit {
+            chunk,
+            score: qv.iter().zip(v).map(|(a, b)| a * b).sum(),
+        };
+        if ids.is_some_and(|(a, b)| chunk.end_id >= a && chunk.start_id < b) {
+            in_range.push(hit);
         }
+        all.push(hit);
     })?;
+    let mut hits = if in_range.is_empty() { all } else { in_range };
+    hits.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.chunk.id.cmp(&b.chunk.id)));
+    if !opt.keywords.is_empty() {
+        hits = fuse_with_keywords(db, hits, &opt.keywords)?;
+    }
+    hits.truncate(opt.k);
     Ok(hits)
 }
 
-/// Contexto para o LLM: os trechos achados, unidos quando se sobrepõem, em ordem de data, no
-/// formato medido no evals (`[id] AAAA-MM-DD Pessoa: mensagem`). Devolve o texto e as mensagens.
-fn context(db: &Db, hits: &[Hit]) -> Result<(String, Vec<MessageRow>), ToolError> {
-    let mut ranges: Vec<(i64, i64)> = hits.iter().map(|h| (h.chunk.start_id, h.chunk.end_id)).collect();
+/// Reordena `hits` (em ordem vetorial) combinando com a ordem por palavras, em que cada trecho
+/// fica na posição da sua mensagem mais bem colocada no bm25.
+fn fuse_with_keywords(db: &Db, hits: Vec<Hit>, keywords: &[String]) -> Result<Vec<Hit>, ToolError> {
+    let mut found: Vec<(i64, usize)> = db
+        .search_any(keywords, FTS_MESSAGES)?
+        .iter()
+        .enumerate()
+        .map(|(rank, m)| (m.id, rank))
+        .collect();
+    if found.is_empty() {
+        return Ok(hits);
+    }
+    found.sort_unstable();
+    let best = |c: &ChunkRow| {
+        let i = found.partition_point(|(id, _)| *id < c.start_id);
+        found[i..]
+            .iter()
+            .take_while(|(id, _)| *id <= c.end_id)
+            .map(|(_, r)| *r)
+            .min()
+    };
+    let mut by_words: Vec<(usize, usize)> = hits
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| best(&h.chunk).map(|r| (r, i)))
+        .collect();
+    by_words.sort_unstable();
+    let mut fused: Vec<f32> = (0..hits.len()).map(|i| 1.0 / (RRF_K + i as f32 + 1.0)).collect();
+    for (rank, (_, i)) in by_words.into_iter().enumerate() {
+        fused[i] += 1.0 / (RRF_K + rank as f32 + 1.0);
+    }
+    let mut order: Vec<usize> = (0..hits.len()).collect();
+    order.sort_by(|&a, &b| fused[b].total_cmp(&fused[a]).then(a.cmp(&b)));
+    Ok(order.into_iter().map(|i| hits[i]).collect())
+}
+
+/// Contexto para o LLM: os intervalos de mensagens (em ordem de prioridade), unidos quando se
+/// sobrepõem, em ordem de data, no formato medido no evals (`[id] AAAA-MM-DD Pessoa: mensagem`).
+/// Devolve o texto e as mensagens.
+fn context(db: &Db, priority: &[(i64, i64)]) -> Result<(String, Vec<MessageRow>), ToolError> {
+    let mut ranges = priority.to_vec();
     ranges.sort();
     let mut merged: Vec<(i64, i64)> = Vec::new();
     for (s, e) in ranges {
@@ -266,8 +437,9 @@ fn context(db: &Db, hits: &[Hit]) -> Result<(String, Vec<MessageRow>), ToolError
     let mut chars = 0;
     // Os trechos mais relevantes primeiro, até o limite; depois, em ordem de data.
     let rank = |r: &(i64, i64)| {
-        hits.iter()
-            .position(|h| h.chunk.start_id >= r.0 && h.chunk.end_id <= r.1)
+        priority
+            .iter()
+            .position(|p| p.0 >= r.0 && p.1 <= r.1)
             .unwrap_or(usize::MAX)
     };
     let mut by_rank = merged.clone();
@@ -324,18 +496,63 @@ fn inline_ids(text: &str) -> Vec<i64> {
     out
 }
 
+/// Mensagens em volta das citações da resposta anterior que entram no contexto de uma pergunta de
+/// acompanhamento: antes e depois delas, mais para o lado que a pergunta pede ("e depois?").
+const NEAR_FEW: i64 = 4;
+const NEAR_MANY: i64 = 15;
+
+/// Intervalo em volta das citações anteriores, para "e depois?", "e antes disso?" ou "por quê?".
+fn around_previous(previous: &PreviousTurn, question: &str) -> Option<(i64, i64)> {
+    let (first, last) = (*previous.citations.iter().min()?, *previous.citations.iter().max()?);
+    let q = crate::router::fold(question);
+    let (before, after) = match crate::router::followup_direction(&q) {
+        Some(crate::router::Direction::After) => (NEAR_FEW, NEAR_MANY),
+        Some(crate::router::Direction::Before) => (NEAR_MANY, NEAR_FEW),
+        None => (NEAR_FEW, NEAR_FEW),
+    };
+    Some(((first - before).max(1), last + after))
+}
+
+/// A pergunta como o LLM a recebe: com a pergunta e a resposta anteriores, numa continuação.
+fn user_message(question: &str, previous: Option<&PreviousTurn>) -> String {
+    match previous {
+        Some(p) => format!(
+            "Pergunta anterior: {}
+Resposta anterior: {}
+Pergunta atual (continuação da anterior): {}",
+            p.question.trim(),
+            p.answer.trim(),
+            question.trim()
+        ),
+        None => question.to_string(),
+    }
+}
+
 /// Responde a uma pergunta sobre o conteúdo: busca, contexto e LLM. As citações são conferidas
 /// contra o contexto; sem nenhuma válida, a resposta vira recusa (o modelo não pode afirmar algo
-/// sem mostrar a mensagem).
+/// sem mostrar a mensagem). Com `previous`, a pergunta é continuação da anterior ("e depois?"):
+/// a busca usa as duas perguntas e o contexto inclui as mensagens em volta das citações anteriores.
 pub fn answer(
     db: &Db,
-    authors: &[String],
+    conv: &crate::Conversation,
     llm: &dyn Llm,
     embedder: &dyn Embedder,
     question: &str,
+    previous: Option<&PreviousTurn>,
+    today: NaiveDate,
 ) -> Result<ChatAnswer, ToolError> {
-    let hits = search(db, embedder, question, TOP_K)?;
-    let (ctx, rows) = context(db, &hits)?;
+    let authors = &conv.authors;
+    let query = match previous {
+        Some(p) => format!("{} {}", p.question.trim(), question.trim()),
+        None => question.to_string(),
+    };
+    let hits = search_with(db, embedder, &query, &options_for(conv, &query, today))?;
+    let mut priority: Vec<(i64, i64)> = previous
+        .and_then(|p| around_previous(p, question))
+        .into_iter()
+        .collect();
+    priority.extend(hits.iter().map(|h| (h.chunk.start_id, h.chunk.end_id)));
+    let (ctx, rows) = context(db, &priority)?;
     let not_found = |text: &str| ChatAnswer {
         interpreted_by: Some(Interpreter::Llm),
         ..ChatAnswer::text_only(Route::Retrieval, text.to_string())
@@ -350,7 +567,7 @@ pub fn answer(
     let out = llm
         .complete(
             &llm::rag_prompt(a, b, &ctx),
-            question,
+            &user_message(question, previous),
             &llm::rag_schema(),
             ANSWER_MAX_TOKENS,
         )
@@ -385,5 +602,6 @@ pub fn answer(
         result: None,
         interpreted_by: Some(Interpreter::Llm),
         citations,
+        followup: false,
     })
 }

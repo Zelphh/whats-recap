@@ -37,6 +37,7 @@ Ferramentas de linha de comando:
 cargo run --release -p synth -- --days 1825 --per-day 120 [--media] -o conversa.{txt,zip}   # conversa sintética
 cargo run --release -p core-stats --example analyze -- conversa.zip [--json stats.json]       # importa + estatísticas com tempos
 cargo run --release -p core-chat --example ask -- conversa.db "Quem responde mais rápido?"    # testa o chat num .db
+cargo run --release -p core-llm --example busca -- conversa.db ../whatsrecap-evals/datasets/rag.json  # mede a busca do RAG (e5 na CPU)
 cargo run -p synth --bin anonymize -- export.txt -o crates/core-parser/tests/fixtures/x.txt  # export real → fixture
 ```
 

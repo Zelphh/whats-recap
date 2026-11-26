@@ -177,14 +177,64 @@ compila o app e passa em `cargo test --workspace`.
       linha do modelo de busca em Configurações; o servidor de chat ganhou um 3º slot (o prompt do
       RAG muda a cada pergunta e não tira do cache o roteador e a seleção de ferramenta)
 - [x] Roteador: "quanto custou/pagou/ficou" e "quantos anos" são conteúdo, não contagem
-- [ ] Testar com os modelos de verdade: `cargo run --release -p core-llm --example conteudo --
-      conversa.db "pergunta"` (indexa na CPU e responde na GPU). Medir o tempo de indexação de
-      ~190 mil mensagens e as perguntas do `rag.json` do evals injetadas numa conversa sintética
-- [ ] O texto dos trechos para o embedder mudou em relação ao evals (data uma vez e
-      "Pessoa: mensagem", sem id e data por linha, para caber nos 512 tokens do e5 e indexar mais
-      rápido): medir o MRR com esse formato no evals
-- [ ] Calibrar top-k e o tamanho das janelas
-- [ ] Perguntas de acompanhamento ("e depois?") não têm memória: cada pergunta busca sozinha
+- [x] Teste com os modelos de verdade (2026-11-20, `--example conteudo`): as 20 janelas e 18
+      perguntas do `rag.json` do evals injetadas numa conversa sintética de 188.772 mensagens.
+      - Indexação na CPU (Ryzen 7 5700X): 18.858 trechos em **264 s** (~1,4 min por 100 mil
+        mensagens; o evals estimava ~20 min). Embedder carrega em 1,8 s; busca em ~45 ms
+      - 4/4 recusas certas (nada inventado); 7/14 respostas certas com citação certa (Hanami,
+        Pipoca, conserto, senha do wifi, endereço, aluguel, Chile). Nenhuma resposta errada
+        afirmada: as 7 falhas viraram "não encontrei" ou resposta parcial
+      - As falhas são de busca: o sintético repete os mesmos assuntos milhares de vezes
+        ("comprei as passagens pra Floripa" 3.370×, "filme" 3.276×, "aniversário" 3.247×) e os
+        trechos certos não ficam entre os 5. Com conversas reais o ruído é outro; medir lá
+      - "o que o veterinário falou da Pipoca?": achou a otite, mas respondeu `found: false`
+      - Resposta em 3,5–10 s por pergunta (9B na GPU; contexto de até ~2 mil tokens sem cache),
+        acima dos ~2 s do evals (janelas menores)
+- [x] Calibração da busca (2026-11-25): `cargo run --release -p core-llm --example busca --
+      conversa-rag.db ../whatsrecap-evals/datasets/rag.json [12,2,1000 8,2,700 ...]` mede
+      recall@k e MRR das 14 perguntas respondíveis do `rag.json` na conversa do teste acima, com
+      os trechos e o texto do app (e5 na CPU, sem o modelo de chat). MRR / recall@5:
+
+      | trechos (msgs/caracteres/sobreposição) | vetorial | + datas | híbrida (FTS, RRF) |
+      |---|---|---|---|
+      | 12 / 1.000 / 2 (18.858 trechos) | 0,60 / 9 | 0,62 / 10 | 0,59 / 8 |
+      | 8 / 700 / 2 (29.924) | 0,62 / 10 | 0,63 / 10 | 0,59 / 9 |
+      | 6 / 500 / 1 (36.275) | 0,58 / 9 | 0,64 / 10 | 0,59 / 9 |
+
+      - Fica: trechos de 12, top-5, só vetorial e **filtro de datas** quando a pergunta cita um
+        período ("em julho de 2023", "ano passado"; ±7 dias; sem trecho no período, ignora).
+        O filme de julho de 2023 foi do 12º para o 4º lugar
+      - A híbrida piora em todas as formas (as palavras comuns da pergunta puxam trechos
+        errados), como no evals; fica no código atrás de `rag::HYBRID` para medir com conversa real
+      - Janelas menores não acham mais e indexam 1,6–1,9× mais trechos
+      - Os acertos depois do 5º só aparecem no 11º–14º (emprego novo, idade da mãe): top-8/10
+        não ajuda. Fora dos 50 nas três formas: Floripa e "casar" (o sintético repete esses
+        assuntos milhares de vezes)
+      - Isso substitui medir o formato novo dos trechos no evals: a medida agora é com o formato
+        do app, numa conversa do tamanho real. Não houve comparação direta com o formato antigo
+        no mesmo corpus
+- [ ] Reordenar pelo LLM os 15–20 primeiros trechos antes de mandar 5 (pegaria o 11º–14º);
+      custa uma chamada a mais na GPU. Medir com conversa real antes
+- [ ] Medir a busca numa conversa real (anonimizada, fora do git), onde o ruído é outro
+- [x] Perguntas de acompanhamento: o frontend manda a última resposta (pergunta, rota, texto e
+      ids citados) e, se ela foi sobre o conteúdo e a nova é curta e com cara de continuação
+      ("e depois?", "por quê?", "quando foi isso?", "e ela respondeu o quê?"), a nova vai para o
+      RAG: busca com as duas perguntas, contexto com as mensagens em volta das citações
+      anteriores (mais para depois em "e depois?", mais para antes em "por quê?") e o LLM
+      recebe a pergunta e a resposta anteriores. A interface diz "entendida como continuação"
+- [ ] Continuações de contagens ("quantas vezes ele falou amor?" → "e ela?") ainda não são
+      entendidas
+- [x] Continuações e filtro de datas com os modelos de verdade (2026-11-25, `--example conteudo`,
+      que agora manda a resposta anterior como o app): "e onde fica?" (rua Augusta), "e o que
+      tinha quebrado?" (embreagem), "e depois?" (parcelou em 3x), "por quê?" (a Pipoca, ele, a
+      mãe) e "e quanto foi a consulta?" (180), todas com a citação certa, em 2–7 s. O filme de
+      julho de 2023 passou a ser achado: 8/14 respostas certas (eram 7), 4/4 recusas certas.
+      Corrigido no teste: "depois" no meio da frase marcava continuação ("o aluguel depois da
+      negociação") e "quanto foi" ia para contagem
+- [ ] O modelo responde `found: false` quando a resposta é indireta ou um "não": "o que o
+      veterinário falou da Pipoca?" (diz a otite, mas sem citação) e "a Ana chegou a se mudar pra
+      SP?" (diz que ela decidiu não ir, sem citação). Ajustar o prompt do RAG e medir F no evals
+- [ ] "e quantas vezes ela falou isso?" conta a palavra "isso" (regra fixa)
 
 ## Fora do LLM
 

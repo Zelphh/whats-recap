@@ -3,7 +3,9 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { Dot, Icon } from "../components/ui";
 import { fmtDate, fmtInt, fmtTime } from "../format";
-import type { ChatAnswer, ImportSummary, ListFilter, LlmStatus, RagInfo, RagProgressEvent, ToolCall } from "../types";
+import type {
+  ChatAnswer, ImportSummary, ListFilter, LlmStatus, PreviousTurn, RagInfo, RagProgressEvent, ToolCall,
+} from "../types";
 import type { Listing } from "./Viewer";
 
 export interface ChatTurn {
@@ -120,7 +122,7 @@ function RagCard({ id }: { id: string }) {
               ? "Indexando a conversa… pode usar o app enquanto isso; as contagens continuam funcionando."
               : started
                 ? `Indexação pausada em ${Math.floor((100 * done) / total)}%. Continua de onde parou.`
-                : `Para responder perguntas como “o que ela disse sobre o emprego novo?”, a conversa precisa ser indexada uma vez (${fmtInt(info.messageCount)} mensagens; leva cerca de 1 minuto a cada 10 mil, na CPU).`}
+                : `Para responder perguntas como “o que ela disse sobre o emprego novo?”, a conversa precisa ser indexada uma vez (${fmtInt(info.messageCount)} mensagens; leva cerca de 1,5 minuto a cada 100 mil, na CPU).`}
           </p>
         </div>
         {info.running ? (
@@ -245,9 +247,18 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage, onOpenListin
     setBusy(true);
     api.llmStatus().then(setLlm).catch(() => setLlm("off"));
     const index = turns.length;
+    const last = turns[index - 1];
+    const previous: PreviousTurn | null = last?.answer
+      ? {
+          question: last.question,
+          route: last.answer.route,
+          answer: last.answer.text,
+          citations: last.answer.citations.map((c) => c.id),
+        }
+      : null;
     setTurns((t) => [...t, { question: text }]);
     try {
-      const answer = await api.chatAsk(id, text);
+      const answer = await api.chatAsk(id, text, previous);
       setTurns((t) => t.map((turn, i) => (i === index ? { ...turn, answer } : turn)));
     } catch (e) {
       setTurns((t) => t.map((turn, i) => (i === index ? { ...turn, error: String(e) } : turn)));
@@ -327,7 +338,9 @@ export function Chat({ id, summary, turns, setTurns, onOpenMessage, onOpenListin
                   {t.answer.route === "retrieval" && t.answer.interpretedBy === "llm" && (
                     <div className="how">
                       <span title="O modelo leu só os trechos da conversa mais parecidos com a pergunta; as citações foram conferidas.">
-                        respondido pelo modelo a partir dos trechos mais parecidos com a pergunta
+                        {t.answer.followup
+                          ? "entendida como continuação da pergunta anterior; respondido pelo modelo a partir dos trechos dela e desta"
+                          : "respondido pelo modelo a partir dos trechos mais parecidos com a pergunta"}
                       </span>
                     </div>
                   )}

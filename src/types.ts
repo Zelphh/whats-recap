@@ -185,6 +185,17 @@ export interface ChatAnswer {
   /** Quem escolheu a ferramenta: as regras fixas ou o modelo de linguagem. */
   interpretedBy: "heuristic" | "llm" | null;
   citations: MessageRow[];
+  /** Respondida como continuação da pergunta anterior ("e depois?"). */
+  followup: boolean;
+}
+
+/** A última pergunta respondida, mandada junto com a próxima para o chat entender continuações. */
+export interface PreviousTurn {
+  question: string;
+  route: ChatRoute;
+  answer: string;
+  /** Ids das mensagens citadas. */
+  citations: number[];
 }
 
 /** Modelo de linguagem do chat: ausente (só regras fixas), ainda não carregado, carregando ou pronto. */

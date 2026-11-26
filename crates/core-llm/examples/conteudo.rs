@@ -6,7 +6,8 @@
 //! cargo run --release -p core-llm --example conteudo -- conversa.db "o que ela disse sobre o emprego novo?"
 //! ```
 //!
-//! Sem perguntas, só indexa. Caminhos como no example `chat` (`WHATSRECAP_LLAMA_SERVER`,
+//! Sem perguntas, só indexa. Cada pergunta vai com a resposta anterior, como no app, para testar
+//! continuações ("e depois?"). Caminhos como no example `chat` (`WHATSRECAP_LLAMA_SERVER`,
 //! `WHATSRECAP_MODEL`) e `WHATSRECAP_EMBEDDER` para o `.gguf` do e5.
 
 use core_llm::{E5_SMALL, Server, ServerConfig};
@@ -86,12 +87,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         server: OnceCell::new(),
     };
     let today = chrono::Local::now().date_naive();
+    let mut previous: Option<core_chat::PreviousTurn> = None;
     for question in args {
         let t = Instant::now();
-        let hits = core_chat::rag::search(&db, &embedder, &question, core_chat::rag::TOP_K)?;
+        let conv = core_chat::Conversation::open(&db)?;
+        let opt = core_chat::rag::options_for(&conv, &question, today);
+        let hits = core_chat::rag::search_with(&db, &embedder, &question, &opt)?;
         let search = t.elapsed();
-        let a = core_chat::ask_with(&db, &question, Some(&llm), Some(&embedder), today)?;
-        println!("? {question}");
+        let a = core_chat::ask_after(&db, &question, previous.as_ref(), Some(&llm), Some(&embedder), today)?;
+        previous = Some(core_chat::PreviousTurn {
+            question: question.clone(),
+            route: a.route,
+            answer: a.text.clone(),
+            citations: a.citations.iter().map(|m| m.id).collect(),
+        });
+        println!("? {question}{}", if a.followup { "  (continuação)" } else { "" });
         println!(
             "  busca ({search:.0?}): {}",
             hits.iter()
